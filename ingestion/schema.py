@@ -43,6 +43,20 @@ def init_db():
         )
     """)
 
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS activities (
+            id VARCHAR PRIMARY KEY,
+            date DATE,
+            activity_type VARCHAR,
+            distance_miles DECIMAL(5,2),
+            duration_seconds INTEGER,
+            avg_pace_seconds_per_mile INTEGER,
+            avg_hr INTEGER,
+            calories INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     con.close()
 
 if __name__ == "__main__":
