@@ -19,27 +19,33 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 PROCESSED_DIR = DROP_FOLDER / "processed"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
-PROMPT = """Identify the type of this Garmin fitness tracker screenshot and extract the relevant metrics.
+PROMPT = """You are extracting data from a Garmin fitness tracker screenshot.
 
-If it shows a daily activity summary (steps, heart rate for the day), return:
+First, decide which type of screen this is:
+- ACTIVITY screen: shows a specific workout (e.g. a run, walk, or ride) with metrics like distance, duration, pace, or workout heart rate. There may be multiple activities listed.
+- DAILY SUMMARY screen: shows aggregate stats for the whole day — total steps, active minutes, resting heart rate. No distance or pace is shown.
+
+If this is an ACTIVITY screen, return a JSON array with one object per activity — even if there is only one:
+[
+  {
+    "type": "activity",
+    "date": "YYYY-MM-DD",
+    "activity_type": <"running", "walking", "cycling", or similar>,
+    "distance_miles": <float or null>,
+    "duration_seconds": <integer or null>,
+    "avg_pace_seconds_per_mile": <integer or null>,
+    "avg_hr": <integer or null>,
+    "calories": <integer or null>
+  }
+]
+
+If this is a DAILY SUMMARY screen, return a single JSON object:
 {
   "type": "daily_summary",
   "date": "YYYY-MM-DD",
   "steps": <integer or null>,
   "avg_hr": <integer or null>,
   "active_minutes": <integer or null>
-}
-
-If it shows a specific workout or activity (run, walk, bike ride, etc.), return:
-{
-  "type": "activity",
-  "date": "YYYY-MM-DD",
-  "activity_type": <string e.g. "running", "walking", "cycling">,
-  "distance_miles": <float or null>,
-  "duration_seconds": <integer or null>,
-  "avg_pace_seconds_per_mile": <integer or null>,
-  "avg_hr": <integer or null>,
-  "calories": <integer or null>
 }
 
 Use the date shown in the screenshot. Return null for any metric not visible. No explanation, just JSON."""
@@ -66,12 +72,13 @@ def _query_ollama(image_path: Path) -> str:
     return response.json()["message"]["content"]
 
 
-def _parse_metrics(raw: str) -> Optional[dict]:
-    match = re.search(r"\{.*?\}", raw, re.DOTALL)
+def _parse_metrics(raw: str) -> Optional[list[dict]]:
+    match = re.search(r"(\[.*?\]|\{.*?\})", raw, re.DOTALL)
     if not match:
         return None
     try:
-        return json.loads(match.group())
+        parsed = json.loads(match.group())
+        return parsed if isinstance(parsed, list) else [parsed]
     except json.JSONDecodeError:
         return None
 
@@ -139,20 +146,21 @@ def run() -> None:
             print(f"Processing {image_path.name}...")
             try:
                 raw = _query_ollama(image_path)
-                metrics = _parse_metrics(raw)
-                if not metrics:
+                records = _parse_metrics(raw)
+                if not records:
                     print(f"  Could not parse response: {raw[:200]}")
                     continue
-                record_type = metrics.get("type")
-                if record_type == "daily_summary":
-                    _insert_daily_summary(con, metrics)
-                elif record_type == "activity":
-                    _insert_activity(con, metrics)
-                else:
-                    print(f"  Unknown type '{record_type}', skipping.")
-                    continue
+                for metrics in records:
+                    record_type = metrics.get("type")
+                    if record_type == "daily_summary":
+                        _insert_daily_summary(con, metrics)
+                    elif record_type == "activity":
+                        _insert_activity(con, metrics)
+                    else:
+                        print(f"  Unknown type '{record_type}', skipping.")
+                        continue
+                    print(f"  Inserted: {metrics}")
                 shutil.move(str(image_path), PROCESSED_DIR / image_path.name)
-                print(f"  Inserted: {metrics}")
             except Exception as e:
                 print(f"  Error: {e}")
     finally:
