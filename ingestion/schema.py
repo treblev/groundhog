@@ -52,9 +52,14 @@ def init_db():
             duration_seconds INTEGER,
             avg_pace_seconds_per_mile INTEGER,
             avg_hr INTEGER,
+            max_hr INTEGER,
             calories INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
+    """)
+
+    con.execute("""
+        ALTER TABLE activities ADD COLUMN IF NOT EXISTS max_hr INTEGER
     """)
 
     con.close()

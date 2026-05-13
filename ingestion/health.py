@@ -35,6 +35,7 @@ If this is an ACTIVITY screen, return a JSON array with one object per activity 
     "duration_seconds": <integer or null>,
     "avg_pace_seconds_per_mile": <integer or null>,
     "avg_hr": <integer or null>,
+    "max_hr": <integer or null>,
     "calories": <integer or null>
   }
 ]
@@ -49,7 +50,6 @@ If this is a DAILY SUMMARY screen, return a single JSON object:
 }
 
 Use the date shown in the screenshot. Return null for any metric not visible. No explanation, just JSON."""
-
 
 def _encode_image(path: Path) -> str:
     return base64.b64encode(path.read_bytes()).decode("utf-8")
@@ -114,10 +114,16 @@ def _insert_activity(con: duckdb.DuckDBPyConnection, metrics: dict) -> None:
         """
         INSERT INTO activities (
             id, date, activity_type, distance_miles, duration_seconds,
-            avg_pace_seconds_per_mile, avg_hr, calories
+            avg_pace_seconds_per_mile, avg_hr, max_hr, calories
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (id) DO NOTHING
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (id) DO UPDATE SET
+            distance_miles = COALESCE(excluded.distance_miles, activities.distance_miles),
+            duration_seconds = COALESCE(excluded.duration_seconds, activities.duration_seconds),
+            avg_pace_seconds_per_mile = COALESCE(excluded.avg_pace_seconds_per_mile, activities.avg_pace_seconds_per_mile),
+            avg_hr = COALESCE(excluded.avg_hr, activities.avg_hr),
+            max_hr = COALESCE(excluded.max_hr, activities.max_hr),
+            calories = COALESCE(excluded.calories, activities.calories)
         """,
         [
             activity_id,
@@ -127,6 +133,7 @@ def _insert_activity(con: duckdb.DuckDBPyConnection, metrics: dict) -> None:
             metrics.get("duration_seconds"),
             metrics.get("avg_pace_seconds_per_mile"),
             metrics.get("avg_hr"),
+            metrics.get("max_hr"),
             metrics.get("calories"),
         ],
     )
