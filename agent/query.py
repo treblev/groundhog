@@ -10,9 +10,10 @@ import duckdb
 import httpx
 
 from config.settings import DB_PATH, OLLAMA_SQL_MODEL
+from agent.memory import remember, recall
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = 8
 
 # --- Tool definitions sent to the model ---
 
@@ -70,6 +71,35 @@ TOOLS = [
                     "date": {"type": "string", "description": "Date in YYYY-MM-DD format."}
                 },
                 "required": ["date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remember",
+            "description": "Save a fact or preference to persistent memory for future recall.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fact": {"type": "string", "description": "The fact or preference to remember."}
+                },
+                "required": ["fact"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall",
+            "description": "Search persistent memory for facts relevant to a query.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The topic or question to search memory for."},
+                    "top_k": {"type": "integer", "description": "Number of memories to return. Default 3."},
+                },
+                "required": ["query"],
             },
         },
     },
@@ -131,6 +161,10 @@ def _dispatch(con: duckdb.DuckDBPyConnection, name: str, args: dict) -> str:
         return _get_recent_activities(con, args.get("limit", 5))
     elif name == "get_health_summary":
         return _get_health_summary(con, args["date"])
+    elif name == "remember":
+        return remember(con, args["fact"])
+    elif name == "recall":
+        return recall(con, args["query"], args.get("top_k", 3))
     return f"Unknown tool: {name}"
 
 
@@ -174,7 +208,9 @@ def _ask(question: str, schema: str, con: duckdb.DuckDBPyConnection) -> str:
             "role": "system",
             "content": (
                 "You are a personal data assistant with access to tools that query a local database.\n"
-                "Use tools to answer the user's question. Do not guess — always call a tool to get real data.\n\n"
+                "Use tools to answer the user's question. Do not guess — always call a tool to get real data.\n"
+                "Call only the tools needed to answer the question. Once you have enough information, stop calling tools and give your final answer.\n"
+                "For simple requests like remembering a fact, call remember() once and immediately confirm to the user.\n\n"
                 f"Database schema:\n{schema}"
             ),
         },

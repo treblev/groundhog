@@ -62,6 +62,15 @@ def init_db():
         ALTER TABLE activities ADD COLUMN IF NOT EXISTS max_hr INTEGER
     """)
 
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS memory (
+            id VARCHAR PRIMARY KEY,
+            fact TEXT,
+            embedding FLOAT[],
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     con.close()
 
 if __name__ == "__main__":
