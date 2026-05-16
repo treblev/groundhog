@@ -9,7 +9,7 @@ Natural language → SQL → answer. Two-call pipeline: SQL generation + natural
 ## M3 — Agentic Tool Calling (done)
 Replaced SQL-only approach with a tool-calling loop. Model picks the right tool, executes it, reasons over the result. Up to 5 rounds before final answer.
 
-## M4 — Persistent Memory + Embeddings (next)
+## M4 — Persistent Memory + Embeddings (done)
 Facts and context stored beyond the session. Embeddings + vector search alongside SQL. First real RAG component — structured data (DuckDB) + unstructured memory (vector store) in the same agent.
 
 ## M5 — Multi-step Reasoning (planned)
