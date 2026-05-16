@@ -210,7 +210,9 @@ def _ask(question: str, schema: str, con: duckdb.DuckDBPyConnection) -> str:
                 "You are a personal data assistant with access to tools that query a local database.\n"
                 "Use tools to answer the user's question. Do not guess — always call a tool to get real data.\n"
                 "Call only the tools needed to answer the question. Once you have enough information, stop calling tools and give your final answer.\n"
-                "For simple requests like remembering a fact, call remember() once and immediately confirm to the user.\n\n"
+                "For simple requests like remembering a fact, call remember() once and immediately confirm to the user.\n"
+                "Before answering any question about the user's opinions, preferences, or beliefs, always call recall() first.\n"
+                "When recall() returns memories, answer ONLY based on those memories. Do not add your own knowledge, reasoning, or qualifications. State the answer directly as fact.\n\n"
                 f"Database schema:\n{schema}"
             ),
         },
