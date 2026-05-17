@@ -92,7 +92,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "recall",
-            "description": "Search persistent memory for facts relevant to a query.",
+            "description": "Search persistent memory for the user's personal opinions, preferences, and stated beliefs. Do NOT use for factual data questions — use run_sql or other data tools instead.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -202,7 +202,44 @@ def _chat(messages: list, tools: bool = True) -> dict:
     return response.json()["message"]
 
 
+def _plan(question: str, schema: str) -> str:
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a planning assistant. Given a question and a list of available tools, "
+                "write a concise numbered plan describing exactly which tools to call and in what order to answer the question. "
+                "Be specific: name the tool, what argument to pass, and why it's needed. "
+                "Do NOT call any tools — only write the plan.\n\n"
+                "Available tools: run_sql, get_latest_price, get_recent_activities, get_health_summary, remember, recall\n\n"
+                f"Database schema:\n{schema}"
+            ),
+        },
+        {"role": "user", "content": f"Plan how to answer: {question}"},
+    ]
+    message = _chat(messages, tools=False)
+    return message.get("content", "").strip()
+
+
+def _synthesize(question: str, messages: list) -> str:
+    synthesis_messages = messages + [
+        {
+            "role": "user",
+            "content": (
+                "Based only on the tool results above, give a clear and direct answer to the original question. "
+                "Do not call any more tools. If a week or period returned no rows, it means zero — state that directly."
+            ),
+        }
+    ]
+    message = _chat(synthesis_messages, tools=False)
+    return message.get("content", "No response.")
+
+
 def _ask(question: str, schema: str, con: duckdb.DuckDBPyConnection) -> str:
+    plan = _plan(question, schema)
+    if plan:
+        print(f"  [plan] {plan[:300]}")
+
     messages = [
         {
             "role": "system",
@@ -210,10 +247,14 @@ def _ask(question: str, schema: str, con: duckdb.DuckDBPyConnection) -> str:
                 "You are a personal data assistant with access to tools that query a local database.\n"
                 "Use tools to answer the user's question. Do not guess — always call a tool to get real data.\n"
                 "Call only the tools needed to answer the question. Once you have enough information, stop calling tools and give your final answer.\n"
-                "For simple requests like remembering a fact, call remember() once and immediately confirm to the user.\n"
-                "Before answering any question about the user's opinions, preferences, or beliefs, always call recall() first.\n"
+                "When a tool returns data, interpret it directly and answer. Do not call additional tools to verify or recheck the result.\n"
+                "For comparison queries (this week vs last week, this month vs last month, etc): if only one period appears in the results, the missing period has a count of zero. State the answer directly — do not say more data is needed.\n"
+                "NEVER call remember() unless the user's message explicitly uses the word 'remember' or 'save'. Do not save computed results automatically.\n"
+                "NEVER call recall() after remember() — if you just saved a fact you already have it, there is nothing to look up.\n"
+                "Call recall() ONLY when the question is about the user's personal opinions, preferences, or stated beliefs — NOT for factual questions that can be answered with SQL data.\n"
                 "When recall() returns memories, answer ONLY based on those memories. Do not add your own knowledge, reasoning, or qualifications. State the answer directly as fact.\n\n"
                 f"Database schema:\n{schema}"
+                + (f"\n\nExecution plan:\n{plan}" if plan else "")
             ),
         },
         {"role": "user", "content": question},
@@ -227,7 +268,6 @@ def _ask(question: str, schema: str, con: duckdb.DuckDBPyConnection) -> str:
 
         # fallback: model returned tool call as JSON text in content
         if not tool_calls:
-            import re
             content = message.get("content", "")
             match = re.search(r'\{.*\}', content, re.DOTALL)
             if match:
@@ -253,7 +293,7 @@ def _ask(question: str, schema: str, con: duckdb.DuckDBPyConnection) -> str:
             print(f"  [tool] {name}({args}) → {result[:120]}")
             messages.append({"role": "tool", "content": result})
 
-    return "Agent reached max tool rounds without a final answer."
+    return _synthesize(question, messages)
 
 
 def run() -> None:
