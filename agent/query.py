@@ -170,6 +170,15 @@ def _dispatch(con: duckdb.DuckDBPyConnection, name: str, args: dict) -> str:
 
 # --- Schema context ---
 
+_DUCKDB_DIALECT = """\
+-- DuckDB dialect:
+-- Dates:      CURRENT_DATE (not CURDATE()), CURRENT_TIMESTAMP (not NOW())
+-- Intervals:  INTERVAL '7 days' (not INTERVAL 7 DAY)
+-- Truncation: DATE_TRUNC('week', date), DATE_TRUNC('month', date)
+-- Subqueries: no LIMIT inside subqueries — use a CTE instead
+"""
+
+
 def _get_schema(con: duckdb.DuckDBPyConnection) -> str:
     tables = con.execute("SHOW TABLES").fetchdf()["name"].tolist()
     parts = []
@@ -184,7 +193,7 @@ def _get_schema(con: duckdb.DuckDBPyConnection) -> str:
             types = con.execute("SELECT DISTINCT activity_type FROM activities").fetchdf()["activity_type"].tolist()
             note = f"  -- activity_types: {', '.join(t for t in types if t)}"
         parts.append(f"{table}({col_defs}){note}")
-    return "\n".join(parts)
+    return _DUCKDB_DIALECT + "\n".join(parts)
 
 
 # --- Agentic loop ---
