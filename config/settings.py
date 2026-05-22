@@ -4,6 +4,7 @@ import anthropic
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "data" / "db" / "groundhog.duckdb"
 DROP_FOLDER = BASE_DIR / "data" / "drop"
+SLEEP_DROP_FOLDER = BASE_DIR / "data" / "drop" / "sleep8"
 OLLAMA_VISION_MODEL = "qwen3-vl:latest"
 OLLAMA_SQL_MODEL = "qwen3:32b"
 

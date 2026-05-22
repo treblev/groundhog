@@ -63,6 +63,21 @@ def init_db():
     """)
 
     con.execute("""
+        CREATE TABLE IF NOT EXISTS sleep_metrics (
+            date DATE PRIMARY KEY,
+            resting_hr INTEGER,
+            hrv INTEGER,
+            breath_rate DECIMAL(4,1),
+            time_to_fall_asleep_minutes INTEGER,
+            deep_sleep_minutes INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    con.execute("ALTER TABLE sleep_metrics ADD COLUMN IF NOT EXISTS time_to_fall_asleep_minutes INTEGER")
+    con.execute("ALTER TABLE sleep_metrics ADD COLUMN IF NOT EXISTS deep_sleep_minutes INTEGER")
+
+    con.execute("""
         CREATE TABLE IF NOT EXISTS memory (
             id VARCHAR PRIMARY KEY,
             fact TEXT,
