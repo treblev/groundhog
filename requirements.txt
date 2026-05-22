@@ -23,7 +23,7 @@ decorator==5.2.1
 defusedxml==0.7.1
 distro==1.9.0
 docstring_parser==0.18.0
-duckdb==1.5.2
+duckdb==1.5.3
 executing==2.2.1
 fastjsonschema==2.21.2
 fqdn==1.5.1
