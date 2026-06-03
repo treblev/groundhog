@@ -24,9 +24,42 @@ def init_db():
         CREATE TABLE IF NOT EXISTS stock_watchlist (
             date DATE,
             ticker VARCHAR,
+            open DECIMAL(10, 2),
+            high DECIMAL(10, 2),
+            low DECIMAL(10, 2),
             closing_price DECIMAL(10, 2),
+            volume BIGINT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (date, ticker)
+        )
+    """)
+
+    con.execute("ALTER TABLE stock_watchlist ADD COLUMN IF NOT EXISTS open DECIMAL(10, 2)")
+    con.execute("ALTER TABLE stock_watchlist ADD COLUMN IF NOT EXISTS high DECIMAL(10, 2)")
+    con.execute("ALTER TABLE stock_watchlist ADD COLUMN IF NOT EXISTS low DECIMAL(10, 2)")
+    con.execute("ALTER TABLE stock_watchlist ADD COLUMN IF NOT EXISTS volume BIGINT")
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS stock_signals (
+            id VARCHAR PRIMARY KEY,
+            date DATE,
+            ticker VARCHAR,
+            signal_type VARCHAR,
+            timeframe VARCHAR,
+            value DECIMAL(10, 4),
+            direction VARCHAR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS stock_alerts (
+            id VARCHAR PRIMARY KEY,
+            date DATE,
+            ticker VARCHAR,
+            alert_type VARCHAR,
+            message VARCHAR,
+            notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 

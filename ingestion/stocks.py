@@ -14,19 +14,30 @@ def _fetch_history(ticker: str, period: str):
     if data.empty:
         return []
     data.index = data.index.tz_localize(None)
-    return [(row.name.date(), ticker, float(row["Close"])) for _, row in data.iterrows()]
+    return [
+        (
+            row.name.date(),
+            ticker,
+            float(row["Open"]),
+            float(row["High"]),
+            float(row["Low"]),
+            float(row["Close"]),
+            int(row["Volume"]),
+        )
+        for _, row in data.iterrows()
+    ]
 
 
 def _bulk_insert(con: duckdb.DuckDBPyConnection, rows: list) -> int:
     inserted = 0
-    for date, ticker, price in rows:
+    for date, ticker, open_, high, low, close, volume in rows:
         result = con.execute(
             """
-            INSERT INTO stock_watchlist (date, ticker, closing_price)
-            VALUES (?, ?, ?)
+            INSERT INTO stock_watchlist (date, ticker, open, high, low, closing_price, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (date, ticker) DO NOTHING
             """,
-            [date, ticker, price],
+            [date, ticker, open_, high, low, close, volume],
         )
         inserted += result.rowcount
     return inserted
