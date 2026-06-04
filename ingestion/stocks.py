@@ -29,9 +29,12 @@ def _fetch_history(ticker: str, period: str):
 
 
 def _bulk_insert(con: duckdb.DuckDBPyConnection, rows: list) -> int:
-    inserted = 0
+    if not rows:
+        return 0
+    ticker = rows[0][1]
+    before = con.execute("SELECT COUNT(*) FROM stock_watchlist WHERE ticker = ?", [ticker]).fetchone()[0]
     for date, ticker, open_, high, low, close, volume in rows:
-        result = con.execute(
+        con.execute(
             """
             INSERT INTO stock_watchlist (date, ticker, open, high, low, closing_price, volume)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -39,8 +42,8 @@ def _bulk_insert(con: duckdb.DuckDBPyConnection, rows: list) -> int:
             """,
             [date, ticker, open_, high, low, close, volume],
         )
-        inserted += result.rowcount
-    return inserted
+    after = con.execute("SELECT COUNT(*) FROM stock_watchlist WHERE ticker = ?", [ticker]).fetchone()[0]
+    return after - before
 
 
 def run() -> None:
