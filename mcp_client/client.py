@@ -155,6 +155,16 @@ async def run():
                     types_result = await session.call_tool("run_sql", {"query": "SELECT DISTINCT activity_type FROM activities"})
                     types = [line.strip() for line in types_result.content[0].text.splitlines() if line.strip() and line.strip() != "activity_type"]
                     note = f"  -- activity_types: {', '.join(t for t in types if t)}"
+                elif table == "stock_signals":
+                    note = "  -- signal_type: 'sma_cross' or 'supertrend'; timeframe: 'daily' or 'weekly'; direction: 'bullish' or 'bearish'; value: SMA gap (sma_cross) or supertrend line price (supertrend)"
+                elif table == "stock_alerts":
+                    note = "  -- alert_type: 'golden_cross', 'death_cross', 'supertrend_daily_bullish', 'supertrend_daily_bearish', 'supertrend_weekly_bullish', 'supertrend_weekly_bearish'"
+                elif table == "workouts":
+                    types_result = await session.call_tool("run_sql", {"query": "SELECT DISTINCT structure_type FROM workouts WHERE structure_type IS NOT NULL"})
+                    types = [line.strip() for line in types_result.content[0].text.splitlines() if line.strip() and line.strip() != "structure_type"]
+                    cats_result = await session.call_tool("run_sql", {"query": "SELECT DISTINCT category FROM workouts WHERE category IS NOT NULL"})
+                    cats = [line.strip() for line in cats_result.content[0].text.splitlines() if line.strip() and line.strip() != "category"]
+                    note = f"  -- structure_types: {', '.join(types)}; categories: {', '.join(cats)}"
                 schema_parts.append(f"{table}({col_text[:200]}){note}")
             schema = _DUCKDB_DIALECT + "\n".join(schema_parts)
 
