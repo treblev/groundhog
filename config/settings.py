@@ -19,6 +19,6 @@ def load_watchlist() -> list[tuple[str, str]]:
             continue
         parts = line.split()
         ticker = parts[0]
-        period = parts[1] if len(parts) > 1 else "1d"
+        period = parts[1] if len(parts) > 1 else "2y"
         result.append((ticker, period))
     return result
