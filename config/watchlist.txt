@@ -1,3 +1,6 @@
 INTC 7y
 BTC-USD max
 MSFT 10y
+V 10y
+NET 7y
+SNOW 5y
