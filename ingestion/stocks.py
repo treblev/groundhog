@@ -3,6 +3,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import math
+
 import duckdb
 import yfinance as yf
 
@@ -14,18 +16,26 @@ def _fetch_history(ticker: str, period: str):
     if data.empty:
         return []
     data.index = data.index.tz_localize(None)
-    return [
-        (
+
+    def _safe(val):
+        f = float(val)
+        return None if math.isnan(f) else f
+
+    rows = []
+    for _, row in data.iterrows():
+        close = _safe(row["Close"])
+        if close is None:
+            continue  # skip rows with no closing price
+        rows.append((
             row.name.date(),
             ticker,
-            float(row["Open"]),
-            float(row["High"]),
-            float(row["Low"]),
-            float(row["Close"]),
-            int(row["Volume"]),
-        )
-        for _, row in data.iterrows()
-    ]
+            _safe(row["Open"]),
+            _safe(row["High"]),
+            _safe(row["Low"]),
+            close,
+            int(row["Volume"]) if not math.isnan(float(row["Volume"])) else None,
+        ))
+    return rows
 
 
 def _bulk_insert(con: duckdb.DuckDBPyConnection, rows: list) -> int:
