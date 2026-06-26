@@ -125,7 +125,6 @@ def run() -> None:
         for ticker in tickers:
             print(f"Checking alerts for {ticker}...")
             _check_sma_cross(con, ticker)
-            _check_supertrend_flip(con, ticker, "daily")
             _check_supertrend_flip(con, ticker, "weekly")
     finally:
         con.close()
