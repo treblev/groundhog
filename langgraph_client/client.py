@@ -38,19 +38,19 @@ def _make_tools(session: ClientSession) -> list:
         result = await session.call_tool("get_recent_activities", {"limit": limit})
         return result.content[0].text if result.content else "No result."
 
-    async def get_health_summary() -> str:
-        """Get a summary of recent health metrics."""
-        result = await session.call_tool("get_health_summary", {})
+    async def get_health_summary(date: str) -> str:
+        """Get health metrics (steps, avg HR, active minutes) for a specific date (YYYY-MM-DD). Use run_sql first to find the latest available date if needed."""
+        result = await session.call_tool("get_health_summary", {"date": date})
         return result.content[0].text if result.content else "No result."
 
-    async def remember(key: str, value: str) -> str:
-        """Save a personal note or preference to memory."""
-        result = await session.call_tool("remember", {"key": key, "value": value})
+    async def remember(fact: str) -> str:
+        """Save a fact or preference to persistent memory for future recall."""
+        result = await session.call_tool("remember", {"fact": fact})
         return result.content[0].text if result.content else "Saved."
 
-    async def recall(key: str) -> str:
-        """Recall a previously saved personal note or preference."""
-        result = await session.call_tool("recall", {"key": key})
+    async def recall(query: str, top_k: int = 3) -> str:
+        """Search persistent memory for the user's personal opinions, preferences, and stated beliefs."""
+        result = await session.call_tool("recall", {"query": query, "top_k": top_k})
         return result.content[0].text if result.content else "Nothing found."
 
     return [run_sql, get_latest_price, get_recent_activities, get_health_summary, remember, recall]
@@ -102,6 +102,9 @@ async def run():
                     "Use tools to answer the user's question. Do not guess — always call a tool to get real data.\n"
                     "Call only the tools needed. Once you have enough information, stop and give your final answer.\n"
                     "When a tool returns data, interpret it directly. Do not call additional tools to verify.\n"
+                    "If a table returns only null/empty data, immediately call run_sql on related tables "
+                    "(e.g. sleep_metrics, workouts) yourself before answering. Do not ask the user for "
+                    "permission to check — just check.\n"
                     "For comparison queries: if only one period appears, the missing period is zero.\n"
                     "NEVER call remember() unless the user explicitly says 'remember' or 'save'.\n"
                     "Call recall() ONLY for questions about personal opinions, preferences, or stated beliefs.\n"
