@@ -1,0 +1,115 @@
+{
+  "_readme": "Ground-truth labels for screenshots in data/drop/processed/, hand-verified against the actual image pixels. 'expected' mirrors the exact JSON schema ingestion/health.py's PROMPT asks the vision model to produce, so model output can be diffed field-by-field against it. 'year_visible_in_image' flags whether the source screenshot actually prints a year anywhere (small text under the date) vs. shows none at all -- these are two different failure modes and should probably be scored/reported separately.",
+  "_year_inference_rule": "When a card shows day/month but no year (year_visible_in_image: false), the year is not recoverable from the image itself -- an ingestion pipeline can only correctly infer it by assuming the current year at ingestion time, rolling back one year if that would put the date in the future (matches ingestion/health.py's _fix_hallucinated_year). For scoring: don't fail a model/pipeline on year for these images if it resolves to what this rule would produce; do fail it if it invents an unrelated year (e.g. 2023) the way the raw model has been observed to do.",
+  "images": [
+    {
+      "file": "Screenshot 2026-05-10 at 11.42.06 AM.png",
+      "screen_type": "activity",
+      "year_visible_in_image": true,
+      "notes": "Small '2026' printed directly under 'Apr 30' on the card. 'Chandler' in the on-screen title is a route/nickname, not the activity type -- activity_type should be 'walking'. No max_hr shown for this card.",
+      "expected": [
+        {
+          "type": "activity",
+          "date": "2026-04-30",
+          "activity_type": "walking",
+          "distance_miles": 1.51,
+          "duration_seconds": 1829,
+          "avg_pace_seconds_per_mile": 1215,
+          "avg_hr": 104,
+          "max_hr": null,
+          "calories": 180
+        }
+      ]
+    },
+    {
+      "file": "Screenshot 2026-05-11 at 8.41.22 PM.png",
+      "screen_type": "activity",
+      "year_visible_in_image": true,
+      "notes": "Small '2026' printed under 'May 11' on all three cards. Card 2 (Cardio) has no distance/pace. Card 3 (Treadmill Running) shows no max_hr or calories column at all.",
+      "expected": [
+        {
+          "type": "activity",
+          "date": "2026-05-11",
+          "activity_type": "walking",
+          "distance_miles": 1.0,
+          "duration_seconds": 1220,
+          "avg_pace_seconds_per_mile": 1218,
+          "avg_hr": 108,
+          "max_hr": null,
+          "calories": 118
+        },
+        {
+          "type": "activity",
+          "date": "2026-05-11",
+          "activity_type": "cardio",
+          "distance_miles": null,
+          "duration_seconds": 2100,
+          "avg_pace_seconds_per_mile": null,
+          "avg_hr": 164,
+          "max_hr": 179,
+          "calories": 529
+        },
+        {
+          "type": "activity",
+          "date": "2026-05-11",
+          "activity_type": "running",
+          "distance_miles": 1.87,
+          "duration_seconds": 1801,
+          "avg_pace_seconds_per_mile": 965,
+          "avg_hr": 130,
+          "max_hr": null,
+          "calories": null
+        }
+      ]
+    },
+    {
+      "file": "Screenshot 2026-05-12 at 8.07.07 PM.png",
+      "screen_type": "activity",
+      "year_visible_in_image": true,
+      "notes": "Small '2026' printed under 'May 12' on both cards. Card 1 (Strength) has no distance/pace. Card 2 (Treadmill Running) shows no max_hr or calories column.",
+      "expected": [
+        {
+          "type": "activity",
+          "date": "2026-05-12",
+          "activity_type": "strength training",
+          "distance_miles": null,
+          "duration_seconds": 2191,
+          "avg_pace_seconds_per_mile": null,
+          "avg_hr": 139,
+          "max_hr": 170,
+          "calories": 422
+        },
+        {
+          "type": "activity",
+          "date": "2026-05-12",
+          "activity_type": "running",
+          "distance_miles": 1.27,
+          "duration_seconds": 1808,
+          "avg_pace_seconds_per_mile": 1418,
+          "avg_hr": 104,
+          "max_hr": null,
+          "calories": null
+        }
+      ]
+    },
+    {
+      "file": "Screenshot 2026-07-09 at 19.10.28.png",
+      "screen_type": "activity",
+      "year_visible_in_image": false,
+      "notes": "Detail view only shows 'Jul 6 @ 06:14' -- no year printed anywhere on screen. The '2026-07-06' date below is ground truth confirmed externally (user-verified), not something derivable from the image alone -- flag this image if scoring year accuracy, since a correct model can't actually get the year right here without an out-of-band signal (e.g. assume current year unless that's in the future).",
+      "expected": [
+        {
+          "type": "activity",
+          "date": "2026-07-06",
+          "activity_type": "running",
+          "distance_miles": 2.87,
+          "duration_seconds": 2915,
+          "avg_pace_seconds_per_mile": 1016,
+          "avg_hr": 130,
+          "max_hr": null,
+          "calories": 463
+        }
+      ]
+    }
+  ]
+}

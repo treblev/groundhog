@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import base64
+import calendar
 import hashlib
 import json
 import re
@@ -75,19 +76,32 @@ def _parse_workouts(raw: str) -> list[dict]:
         return []
 
 
+def _resolve_date_from_day(day_of_month: int, today: date) -> date:
+    """Map a bare day-of-month onto a real date, rolling back a month if it's after today."""
+    year, month = today.year, today.month
+    if day_of_month > today.day:
+        month -= 1
+        if month == 0:
+            month, year = 12, year - 1
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(day_of_month, last_day))
+
+
 def _fill_missing_date(workouts: list[dict]) -> None:
     today = date.today()
     for w in workouts:
         if not w.get("date"):
-            w["date"] = today.isoformat()
+            date_day = w.get("date_day")
+            resolved = _resolve_date_from_day(int(date_day), today) if date_day else today
+            w["date"] = resolved.isoformat()
         if not w.get("date_day"):
-            w["date_day"] = today.day
+            w["date_day"] = date.fromisoformat(w["date"]).day
         if not w.get("day_of_week"):
-            w["day_of_week"] = today.strftime("%a").upper()
+            w["day_of_week"] = date.fromisoformat(w["date"]).strftime("%a").upper()
 
 
 def _workout_id(workout: dict) -> str:
-    key = f"{workout.get('date')}|{workout.get('name')}|{workout.get('description', '')[:50]}"
+    key = f"{workout.get('date')}|{workout.get('name')}|{(workout.get('description') or '')[:50]}"
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 

@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import shutil
+from datetime import date
 from typing import Optional
 
 import duckdb
@@ -25,12 +26,16 @@ First, decide which type of screen this is:
 - ACTIVITY screen: shows a specific workout (e.g. a run, walk, or ride) with metrics like distance, duration, pace, or workout heart rate. There may be multiple activities listed.
 - DAILY SUMMARY screen: shows aggregate stats for the whole day — total steps, active minutes, resting heart rate. No distance or pace is shown.
 
+Only extract a value if that specific activity's own row shows a labeled field for it. Never copy or infer a value from a different metric, or from a different activity's row — if a field isn't present for this activity, return null for it.
+
+Screenshots rarely show a year — do not guess one. Only extract the month and day shown.
+
 If this is an ACTIVITY screen, return a JSON array with one object per activity — even if there is only one:
 [
   {
     "type": "activity",
-    "date": "YYYY-MM-DD",
-    "activity_type": <"running", "walking", "cycling", or similar>,
+    "month_day": "MM-DD",
+    "activity_type": <"running", "walking", "cycling", "strength training", "cardio" or "other">,
     "distance_miles": <float or null>,
     "duration_seconds": <integer or null>,
     "avg_pace_seconds_per_mile": <integer or null>,
@@ -43,13 +48,13 @@ If this is an ACTIVITY screen, return a JSON array with one object per activity 
 If this is a DAILY SUMMARY screen, return a single JSON object:
 {
   "type": "daily_summary",
-  "date": "YYYY-MM-DD",
+  "month_day": "MM-DD",
   "steps": <integer or null>,
   "avg_hr": <integer or null>,
   "active_minutes": <integer or null>
 }
 
-Use the date shown in the screenshot. Return null for any metric not visible. No explanation, just JSON."""
+Return null for any metric not visible. No explanation, just JSON."""
 
 def _encode_image(path: Path) -> str:
     return base64.b64encode(path.read_bytes()).decode("utf-8")
@@ -67,7 +72,7 @@ def _query_ollama(image_path: Path) -> str:
         ],
         "stream": False,
     }
-    response = httpx.post(OLLAMA_URL, json=payload, timeout=120.0)
+    response = httpx.post(OLLAMA_URL, json=payload, timeout=600.0)
     response.raise_for_status()
     return response.json()["message"]["content"]
 
@@ -81,6 +86,22 @@ def _parse_metrics(raw: str) -> Optional[list[dict]]:
         return parsed if isinstance(parsed, list) else [parsed]
     except json.JSONDecodeError:
         return None
+
+
+def _resolve_date(month_day: str, today: date) -> Optional[str]:
+    """The model is never asked for a year (screenshots rarely show one reliably).
+    Pin the year to today's, rolling back one year if that would land in the future."""
+    try:
+        month, day_num = (int(p) for p in month_day.split("-"))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    try:
+        candidate = date(today.year, month, day_num)
+    except ValueError:
+        return None
+    if candidate > today:
+        candidate = candidate.replace(year=candidate.year - 1)
+    return candidate.isoformat()
 
 
 def _activity_id(date: str, activity_type: str, duration_seconds: Optional[int]) -> str:
@@ -158,6 +179,10 @@ def run() -> None:
                     print(f"  Could not parse response: {raw[:200]}")
                     continue
                 for metrics in records:
+                    metrics["date"] = _resolve_date(metrics.get("month_day"), date.today())
+                    if not metrics["date"]:
+                        print(f"  Could not resolve date from month_day={metrics.get('month_day')!r}, skipping.")
+                        continue
                     record_type = metrics.get("type")
                     if record_type == "daily_summary":
                         _insert_daily_summary(con, metrics)
