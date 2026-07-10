@@ -6,7 +6,7 @@
 
 **Groundhog** is a personal data pipeline and local AI agent. It ingests health, sleep, workout, and stock market data into a single local DuckDB database, runs technical analysis signals, fires macOS alerts on trading signals, and answers natural-language questions about the data via an LLM agent.
 
-**Current status:** Milestone 5 complete. All core data pipelines are running in production (daily launchd job). A LangGraph agent spike is in progress (paused at Step 2 of ~7).
+**Current status:** Milestone 5 complete. All core data pipelines are running in production (daily launchd job). `langgraph_client/client.py` has replaced the hand-rolled `mcp_client/client.py` as the active agent — it uses LangChain's `create_agent()` directly rather than a custom `StateGraph`. `mcp_client/client.py` is kept for reference only.
 
 ---
 
@@ -17,13 +17,13 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
                                           ↓
                                mcp_server/ (tool server, stdio)
                                           ↓
-                          langgraph_client/ (NEW, in progress)
-                          mcp_client/      (OLD hand-rolled loop)
+                          langgraph_client/ (active — create_agent())
+                          mcp_client/      (legacy hand-rolled loop, kept for reference)
 ```
 
 - **Ingestion**: yfinance (stocks), Garmin screenshots via vision LLM (health/sleep), SugarWOD screenshots via vision LLM (workouts)
 - **Analytics**: SMA50/200 crossover, Supertrend (daily + weekly) → `stock_signals` → `stock_alerts`
-- **Agent**: MCP tool server (stdio JSON-RPC) + LangGraph client (replacing hand-rolled loop)
+- **Agent**: MCP tool server (stdio JSON-RPC) + LangGraph client (`create_agent()`), replacing the hand-rolled loop
 - **Scheduling**: macOS launchd (not cron — cron skips when Mac sleeps)
 - **AI**: Ollama local only. `qwen3:32b` for SQL/text, `qwen3-vl:latest` for vision. No external API calls with personal data.
 
@@ -42,8 +42,8 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 | `analytics/signals.py` | SMA50/200 + Supertrend (daily+weekly). Uses `ta` lib for SMA, manual pandas for Supertrend. |
 | `analytics/alerts.py` | Reads signal direction flips → macOS notification → stock_alerts dedup. |
 | `mcp_server/server.py` | MCP stdio tool server. Tools: run_sql, get_latest_price, get_recent_activities, get_health_summary, remember, recall. **Do not modify.** |
-| `mcp_client/client.py` | Old hand-rolled agent loop. Being replaced. Keep for reference. |
-| `langgraph_client/client.py` | New LangGraph agent (in progress, Step 2 of 7 complete). |
+| `mcp_client/client.py` | Old hand-rolled agent loop. Replaced. Keep for reference. |
+| `langgraph_client/client.py` | Active agent. Uses LangChain's `create_agent()` with MCP tools wrapped as async Python functions. |
 | `scripts/daily_stocks.sh` | Chains: stocks.py → signals.py → alerts.py |
 | `scripts/update_watchlist.py` | Scrapes Nasdaq-100 from Wikipedia, merges into watchlist.txt. |
 | `~/Library/LaunchAgents/com.groundhog.daily-stocks.plist` | launchd job, runs 5pm MST daily. |
@@ -53,7 +53,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 ## 4. Current TODOs and Open Bugs
 
 **In progress:**
-- LangGraph agent spike: paused at Step 2. Steps 3–7 remain: plan_node → llm_node → tool_node → wire edges → connect MCP tools → test vs. old client.
+- See `TODO.md` for current `langgraph_client` work: `ToolRetryMiddleware` for malformed tool calls, a `write_todos` mutable planning tool, and prompting the agent to revisit its plan after each tool result.
 
 **Planned features:**
 - Cross-source insights: "how does sleep affect workout performance?" (requires JOIN across sleep_metrics + workouts)
@@ -211,7 +211,8 @@ In order (most recent last):
 - Added sleep ingestion (`ingestion/sleep.py`, `sleep_metrics` table)
 - Added workout ingestion (`ingestion/workouts.py`, `workouts` table)
 - Enriched MCP agent schema context (stock_signals, stock_alerts, workouts hints)
-- Started LangGraph spike (`langgraph_client/client.py`, Step 2 complete)
+- Rewrote `langgraph_client/client.py` to use `create_agent()` instead of a hand-built `StateGraph`
+- Fixed broken tool wrappers in `langgraph_client`
 
 ---
 
@@ -229,18 +230,8 @@ In order (most recent last):
 
 ## 14. Suggested Next Task for Codex
 
-**Continue the LangGraph spike at Step 3.**
+See `TODO.md` for the current punch list on `langgraph_client/client.py`:
 
-Current state of `langgraph_client/client.py` has: `AgentState`, `ChatOllama` initialized. Next steps:
-
-**Step 3 — Add `plan_node`**: Takes `state.question`, calls the LLM with a planning prompt (same as `mcp_client/client.py`'s planning step), stores result in `state.plan`.
-
-**Step 4 — Add `llm_node`**: Calls `llm.bind_tools(tools)` where tools come from MCP server. Appends LLM response to `state.messages`.
-
-**Step 5 — Add `tool_node`**: Uses LangGraph's built-in `ToolNode` or a custom node that dispatches to MCP tools via subprocess. Appends `ToolMessage` results.
-
-**Step 6 — Wire edges**: `START → plan_node → llm_node → conditional(tool_node or synthesize_node) → END`. The conditional checks for tool calls in the last message; loops back to `llm_node` after tools up to `MAX_TOOL_ROUNDS`.
-
-**Step 7 — Test**: Run same questions against both `mcp_client/client.py` and `langgraph_client/client.py`, compare outputs.
-
-Reference for tool wiring: look at `mcp_client/client.py` lines 91–124 for the fallback JSON parsing logic that may need to be replicated in the tool node.
+1. Add `ToolRetryMiddleware` (from `langchain.agents.middleware`) — `qwen3:32b` occasionally emits a tool call as literal text content instead of a structured `tool_calls` entry, and nothing currently catches it.
+2. Add a `write_todos`-style mutable planning tool the agent can call and revise mid-loop, instead of a frozen upfront plan.
+3. Add replanning: prompt the agent to check each new tool result against its current plan before proceeding, rather than assuming a mutable todo list alone fixes plan-drift bugs.

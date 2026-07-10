@@ -15,5 +15,7 @@ Facts and context stored beyond the session. Embeddings + vector search alongsid
 ## M5 — Multi-step Reasoning (done)
 Agent chains multiple tool calls to answer complex questions. Plan → Execute → Synthesize. Upgraded to qwen3:32b after qwen2.5-coder:32b hit its prompt-engineering ceiling on multi-step questions.
 
+**Caveat (2026-07-07):** Superseded in practice by the `create_agent()` rewrite (`langgraph_client/client.py`, commit fc7ba20, 2026-06-26), which traded the explicit plan→execute→synthesize control flow for a simpler, faster black-box loop — no separate planning call exists anymore. That was a deliberate trade for speed and less code, not a regression to fix, but it means this milestone's description no longer matches what the production agent actually does. M6 below reverses the trade-off on purpose via an explicit graph.
+
 ## M6 — Production Hardening (planned)
 Eval framework for vision extraction accuracy. Observability — log every tool call, result, and latency. Prompt versioning. Guardrails for bad SQL or hallucinated answers.
