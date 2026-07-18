@@ -50,7 +50,12 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_recent_activities",
-            "description": "Get the most recent workout activities.",
+            "description": (
+                "Get the user's most recent exercise activities (runs, walks, rides, cardio, "
+                "strength sessions) from the activities table. Use this for any question about "
+                "'recent workouts' or exercise history — the separate 'workouts' table stores gym "
+                "class/WOD programming descriptions, not personal exercise history."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -191,7 +196,17 @@ def _get_schema(con: duckdb.DuckDBPyConnection) -> str:
             note = f"  -- tickers: {', '.join(tickers)}"
         elif table == "activities":
             types = con.execute("SELECT DISTINCT activity_type FROM activities").fetchdf()["activity_type"].tolist()
-            note = f"  -- activity_types: {', '.join(t for t in types if t)}"
+            note = (
+                f"  -- activity_types: {', '.join(t for t in types if t)}. "
+                "This is the user's personal exercise history (runs, walks, cardio, strength). "
+                "For 'recent workouts' questions, use get_recent_activities or query this table."
+            )
+        elif table == "workouts":
+            note = (
+                "  -- gym class / WOD programming descriptions (e.g. SugarWOD), NOT the user's "
+                "personal exercise history. Do not use this table to answer 'my recent workouts' "
+                "questions — use activities instead."
+            )
         parts.append(f"{table}({col_defs}){note}")
     return _DUCKDB_DIALECT + "\n".join(parts)
 
@@ -206,9 +221,23 @@ def _chat(messages: list, tools: bool = True) -> dict:
     }
     if tools:
         payload["tools"] = TOOLS
-    response = httpx.post(OLLAMA_URL, json=payload, timeout=120.0)
+    response = httpx.post(OLLAMA_URL, json=payload, timeout=600.0)
     response.raise_for_status()
     return response.json()["message"]
+
+
+def _chat_with_retry(messages: list, tools: bool = True, max_retries: int = 2) -> dict:
+    """Call the model, retrying if it comes back with neither a tool call nor any
+    content — an empty response that would otherwise be silently accepted as the
+    final answer. Seen intermittently (both qwen3:32b and qwen3.6)."""
+    message: dict = {}
+    for attempt in range(max_retries + 1):
+        message = _chat(messages, tools=tools)
+        if message.get("tool_calls") or message.get("content", "").strip():
+            return message
+        if attempt < max_retries:
+            print(f"  [retry] empty response from model, retrying ({attempt + 1}/{max_retries})")
+    return message
 
 
 def _plan(question: str, schema: str) -> str:
@@ -226,7 +255,7 @@ def _plan(question: str, schema: str) -> str:
         },
         {"role": "user", "content": f"Plan how to answer: {question}"},
     ]
-    message = _chat(messages, tools=False)
+    message = _chat_with_retry(messages, tools=False)
     return message.get("content", "").strip()
 
 
@@ -240,8 +269,8 @@ def _synthesize(question: str, messages: list) -> str:
             ),
         }
     ]
-    message = _chat(synthesis_messages, tools=False)
-    return message.get("content", "No response.")
+    message = _chat_with_retry(synthesis_messages, tools=False)
+    return message.get("content", "").strip() or "No response."
 
 
 def _ask(question: str, schema: str, con: duckdb.DuckDBPyConnection) -> str:
@@ -261,7 +290,8 @@ def _ask(question: str, schema: str, con: duckdb.DuckDBPyConnection) -> str:
                 "NEVER call remember() unless the user's message explicitly uses the word 'remember' or 'save'. Do not save computed results automatically.\n"
                 "NEVER call recall() after remember() — if you just saved a fact you already have it, there is nothing to look up.\n"
                 "Call recall() ONLY when the question is about the user's personal opinions, preferences, or stated beliefs — NOT for factual questions that can be answered with SQL data.\n"
-                "When recall() returns memories, answer ONLY based on those memories. Do not add your own knowledge, reasoning, or qualifications. State the answer directly as fact.\n\n"
+                "When recall() returns memories, answer ONLY based on those memories. Do not add your own knowledge, reasoning, or qualifications. State the answer directly as fact.\n"
+                "When the user says 'workouts', 'exercise', or 'activities' referring to things they personally did (runs, walks, cardio, strength sessions), that means the activities table / get_recent_activities tool — NOT the workouts table, which stores unrelated gym class/WOD programming text.\n\n"
                 f"Database schema:\n{schema}"
                 + (f"\n\nExecution plan:\n{plan}" if plan else "")
             ),
@@ -270,7 +300,7 @@ def _ask(question: str, schema: str, con: duckdb.DuckDBPyConnection) -> str:
     ]
 
     for _ in range(MAX_TOOL_ROUNDS):
-        message = _chat(messages)
+        message = _chat_with_retry(messages)
 
         # native tool_calls field (Ollama >= 0.3 with supported model)
         tool_calls = message.get("tool_calls")
@@ -289,7 +319,8 @@ def _ask(question: str, schema: str, con: duckdb.DuckDBPyConnection) -> str:
 
         # no tool call — model has a final answer
         if not tool_calls:
-            return message.get("content", "No response.")
+            answer = message.get("content", "").strip()
+            return answer if answer else "The model returned an empty response after retrying — try rephrasing your question."
 
         # execute each tool call and feed results back
         messages.append(message)
