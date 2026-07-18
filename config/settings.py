@@ -7,7 +7,7 @@ DROP_FOLDER = BASE_DIR / "data" / "drop"
 SLEEP_DROP_FOLDER = BASE_DIR / "data" / "drop" / "sleep8"
 WORKOUTS_DROP_FOLDER = BASE_DIR / "data" / "drop" / "workouts"
 OLLAMA_VISION_MODEL = "qwen3-vl:latest"
-OLLAMA_SQL_MODEL = "qwen3:32b"
+OLLAMA_SQL_MODEL = "qwen3.6:latest"
 
 WATCHLIST_FILE = BASE_DIR / "config" / "watchlist.txt"
 
