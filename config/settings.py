@@ -1,8 +1,13 @@
 from pathlib import Path
+import os
+
 import anthropic
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = BASE_DIR / "data" / "db" / "groundhog.duckdb"
+load_dotenv(BASE_DIR / ".env")
+
+DB_PATH = Path(os.environ["GROUNDHOG_DB_PATH"])
 DROP_FOLDER = BASE_DIR / "data" / "drop"
 SLEEP_DROP_FOLDER = BASE_DIR / "data" / "drop" / "sleep8"
 WORKOUTS_DROP_FOLDER = BASE_DIR / "data" / "drop" / "workouts"
