@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import math
+from datetime import date, timedelta
 
 import duckdb
 import yfinance as yf
@@ -11,8 +12,11 @@ import yfinance as yf
 from config.settings import DB_PATH, load_watchlist
 
 
-def _fetch_history(ticker: str, period: str):
-    data = yf.Ticker(ticker).history(period=period)
+def _fetch_history(ticker: str, period: str, start_date: date | None = None):
+    if start_date is None:
+        data = yf.Ticker(ticker).history(period=period)
+    else:
+        data = yf.Ticker(ticker).history(start=start_date.isoformat())
     if data.empty:
         return []
     data.index = data.index.tz_localize(None)
@@ -36,6 +40,14 @@ def _fetch_history(ticker: str, period: str):
             int(row["Volume"]) if not math.isnan(float(row["Volume"])) else None,
         ))
     return rows
+
+
+def _latest_date(con: duckdb.DuckDBPyConnection, ticker: str) -> date | None:
+    row = con.execute(
+        "SELECT MAX(date) FROM stock_watchlist WHERE ticker = ?",
+        [ticker],
+    ).fetchone()
+    return row[0] if row and row[0] is not None else None
 
 
 def _bulk_insert(con: duckdb.DuckDBPyConnection, rows: list) -> int:
@@ -65,9 +77,19 @@ def run() -> None:
     con = duckdb.connect(str(DB_PATH))
     try:
         for ticker, period in watchlist:
-            print(f"Fetching {ticker} ({period})...")
             try:
-                rows = _fetch_history(ticker, period)
+                latest_date = _latest_date(con, ticker)
+                start_date = latest_date + timedelta(days=1) if latest_date else None
+                if start_date and start_date > date.today():
+                    print(f"Skipping {ticker}: already current through {latest_date}.")
+                    continue
+
+                if start_date:
+                    print(f"Fetching {ticker} (since {start_date})...")
+                else:
+                    print(f"Fetching {ticker} ({period})...")
+
+                rows = _fetch_history(ticker, period, start_date)
                 if not rows:
                     print(f"  No data returned, skipping.")
                     continue
