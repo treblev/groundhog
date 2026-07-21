@@ -54,6 +54,9 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 
 ## 4. Current TODOs and Open Bugs
 
+**Next:**
+- Add automated smoke/regression tests for stock ingestion, including a test that verifies an incremental run requests and processes only dates newer than the latest stored row instead of fetching the full history.
+
 **In progress:**
 - See `TODO.md` for current `langgraph_client` work: `ToolRetryMiddleware` for malformed tool calls, a `write_todos` mutable planning tool, and prompting the agent to revisit its plan after each tool result.
 
