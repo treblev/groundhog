@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Groundhog stock jobs after market close
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 17:00:00 America/Phoenix
+Persistent=true
+Unit=groundhog-stocks.service
+
+[Install]
+WantedBy=timers.target

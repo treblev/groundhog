@@ -1,0 +1,10 @@
+[Unit]
+Description=Groundhog daily stock ingestion, signals, and alerts
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/openclaw/apps/groundhog
+Environment=TZ=America/Phoenix
+Environment=GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb
+Environment=GROUNDHOG_ALERT_BACKEND=none
+ExecStart=/home/openclaw/apps/groundhog/scripts/daily_stocks.sh

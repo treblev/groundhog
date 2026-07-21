@@ -6,7 +6,7 @@
 
 **Groundhog** is a personal data pipeline and local AI agent. It ingests health, sleep, workout, and stock market data into a single local DuckDB database, runs technical analysis signals, fires macOS alerts on trading signals, and answers natural-language questions about the data via an LLM agent.
 
-**Current status:** Milestone 5 complete. All core data pipelines are running in production (daily launchd job). `langgraph_client/client.py` has replaced the hand-rolled `mcp_client/client.py` as the active agent — it uses LangChain's `create_agent()` directly rather than a custom `StateGraph`. `mcp_client/client.py` is kept for reference only.
+**Current status:** Milestone 5 complete. Core data pipelines have been migrated from Mac to Linux under the `openclaw` service user. Stock jobs are ready to run via a systemd user timer. OpenClaw handles chat, scheduling, and delivery; Groundhog remains the local data and analytics layer. `langgraph_client/client.py` has replaced the hand-rolled `mcp_client/client.py` as the active agent — it uses LangChain's `create_agent()` directly rather than a custom `StateGraph`. `mcp_client/client.py` is kept for reference only.
 
 ---
 
@@ -24,7 +24,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 - **Ingestion**: yfinance (stocks), Garmin screenshots via vision LLM (health/sleep), SugarWOD screenshots via vision LLM (workouts)
 - **Analytics**: SMA50/200 crossover, Supertrend (daily + weekly) → `stock_signals` → `stock_alerts`
 - **Agent**: MCP tool server (stdio JSON-RPC) + LangGraph client (`create_agent()`), replacing the hand-rolled loop
-- **Scheduling**: macOS launchd (not cron — cron skips when Mac sleeps)
+- **Scheduling**: Linux systemd user timer under `openclaw`
 - **AI**: Ollama local only. `qwen3:32b` for SQL/text, `qwen3-vl:latest` for vision. No external API calls with personal data.
 
 ---
@@ -40,13 +40,15 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 | `ingestion/sleep.py` | Drops sleep screenshots → vision LLM → sleep_metrics upsert. Date from filename. |
 | `ingestion/workouts.py` | Drops SugarWOD screenshots → vision LLM → workouts upsert. Hash-based dedup ID. |
 | `analytics/signals.py` | SMA50/200 + Supertrend (daily+weekly). Uses `ta` lib for SMA, manual pandas for Supertrend. |
-| `analytics/alerts.py` | Reads signal direction flips → macOS notification → stock_alerts dedup. |
+| `analytics/alerts.py` | Reads signal direction flips → optional notification → stock_alerts dedup. |
 | `mcp_server/server.py` | MCP stdio tool server. Tools: run_sql, get_latest_price, get_recent_activities, get_health_summary, remember, recall. **Do not modify.** |
 | `mcp_client/client.py` | Old hand-rolled agent loop. Replaced. Keep for reference. |
 | `langgraph_client/client.py` | Active agent. Uses LangChain's `create_agent()` with MCP tools wrapped as async Python functions. |
 | `scripts/daily_stocks.sh` | Chains: stocks.py → signals.py → alerts.py |
 | `scripts/update_watchlist.py` | Scrapes Nasdaq-100 from Wikipedia, merges into watchlist.txt. |
-| `~/Library/LaunchAgents/com.groundhog.daily-stocks.plist` | launchd job, runs 5pm MST daily. |
+| `deploy/systemd/user/groundhog-stocks.service` | systemd user service for the daily stock pipeline. |
+| `deploy/systemd/user/groundhog-stocks.timer` | systemd user timer, runs 5pm America/Phoenix on weekdays. |
+| `docs/Linux_Operations.md` | Linux host runbook for stock jobs and the systemd user timer. |
 
 ---
 
@@ -63,7 +65,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 
 **Known open items:**
 - Sleep data has only a few test rows; no automated ingestion trigger yet (manual drop-and-run)
-- Workouts ingestion is manual (drop screenshots, run script); no launchd job
+- Workouts ingestion is manual (drop screenshots, run script); no Linux timer yet
 - `notebooks/agent_prompt_evals.ipynb` has uncommitted changes (visible in git status)
 
 ---
@@ -72,7 +74,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 
 - **Local AI only**: Ollama, never OpenAI/Anthropic API for personal data
 - **DuckDB not SQLite**: chosen for analytical query performance
-- **launchd not cron**: cron skips when Mac sleeps; launchd runs on wake
+- **systemd user timers on Linux**: `openclaw` has linger enabled, so timers run without an active login
 - **Date from filename, not screenshot**: screenshot OCR for dates is unreliable (workouts + sleep)
 - **`ta` library for SMA, manual pandas for Supertrend**: `pandas-ta` fails on Python 3.14 (numba won't build)
 - **Weekly Supertrend**: resample daily OHLCV to weekly with `resample("W-FRI")` — do not fetch weekly bars from yfinance
@@ -114,7 +116,7 @@ python ingestion/workouts.py        # process workout screenshots from data/drop
 
 # Analytics
 python analytics/signals.py         # compute SMA + Supertrend signals
-python analytics/alerts.py          # check flips, fire macOS notifications
+python analytics/alerts.py          # check flips, record deduped alerts, optionally notify
 
 # Update watchlist
 python scripts/update_watchlist.py  # scrape Nasdaq-100 from Wikipedia, merge
@@ -132,9 +134,19 @@ python langgraph_client/client.py
 
 ## 8. Environment Variables Needed
 
-None required — everything is configured in `config/settings.py` with hardcoded paths relative to the project root. Ollama must be running locally (`ollama serve`).
+Required:
 
-The launchd plist sets `TZ=America/Phoenix` for the scheduled job; nothing else.
+```bash
+GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb
+```
+
+Recommended for Linux stock jobs when OpenClaw handles delivery:
+
+```bash
+GROUNDHOG_ALERT_BACKEND=none
+```
+
+The systemd timer is pinned to `America/Phoenix`.
 
 ---
 
@@ -173,7 +185,7 @@ All tables created idempotently by `ingestion/schema.py`.
 | yfinance | Stock OHLCV data | Free, no auth needed |
 | Wikipedia | Nasdaq-100 ticker list | Requires httpx + browser User-Agent; urllib gets 403 |
 | Ollama | LLM inference | Must be running locally; models: qwen3:32b, qwen3-vl:latest |
-| macOS osascript | Desktop notifications | alerts.py uses `subprocess.run(["osascript", ...])` |
+| notify-send / osascript / stdout | Optional local notification backend | `GROUNDHOG_ALERT_BACKEND=auto|none|notify-send|osascript|stdout` |
 
 No external APIs receive personal data. No API keys needed.
 
@@ -191,7 +203,7 @@ No external APIs receive personal data. No API keys needed.
 8. **Weekly Supertrend**: resample daily OHLCV with `resample("W-FRI")`. Do not try to fetch weekly bars from yfinance.
 9. **yfinance NaN rows**: some tickers (ADI, LIN) have NaN in OHLCV fields. Must convert with `_safe()` before inserting.
 10. **`INSERT OR REPLACE` doesn't exist in DuckDB** — SQLite only. Use `ON CONFLICT DO UPDATE SET` or `ON CONFLICT DO NOTHING`.
-11. **cron skips when Mac sleeps** — launchd catches up on wake. Never switch back to cron.
+11. **Linux timers run under `openclaw`** — keep linger enabled so user services continue without login.
 12. **Vision LLM is slow**: `qwen3-vl:latest` can take 14+ minutes for complex screenshots. Workouts ingestion only processes daily screenshots, not weekly calendar views.
 
 ---
@@ -203,8 +215,8 @@ In order (most recent last):
 - Added `open`, `high`, `low`, `volume` columns to `stock_watchlist`
 - Implemented SMA50/200 crossover signals (`analytics/signals.py`)
 - Implemented Supertrend (daily + weekly), verified against Pine Script
-- Implemented `analytics/alerts.py` with macOS notifications and dedup
-- Switched scheduling from cron to launchd (`com.groundhog.daily-stocks.plist`)
+- Implemented `analytics/alerts.py` with optional platform notification backends and dedup
+- Added Linux systemd user timer templates for `openclaw`
 - Expanded watchlist from 6 to 105 tickers (Nasdaq-100 via `scripts/update_watchlist.py`)
 - Fixed DuckDB rowcount -1 bug
 - Fixed NaN handling for ADI/LIN
@@ -222,7 +234,7 @@ In order (most recent last):
 - **`config/settings.py`**: single source of truth; no hardcoded paths anywhere else
 - **`config/watchlist.txt`**: custom periods (`INTC 7y`, `BTC-USD max`, `MSFT 10y`, `V 10y`, `NET 7y`, `SNOW 5y`) must be preserved across any watchlist updates
 - **Supertrend implementation**: verified correct against Pine Script; do not "simplify"
-- **Scheduling**: launchd only, not cron. `TZ=America/Phoenix`.
+- **Scheduling**: Linux systemd user timer under `openclaw`, pinned to `America/Phoenix`.
 - **AI model selection**: local Ollama only. Do not add OpenAI/Anthropic calls.
 - **Date source for sleep/workout ingestion**: date comes from filename, not from screenshot content
 

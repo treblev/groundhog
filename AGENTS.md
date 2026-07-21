@@ -44,7 +44,7 @@ python ingestion/stocks.py        # fetch OHLCV for all 105 watchlist tickers
 python ingestion/sleep.py         # process screenshots from data/drop/sleep8/
 python ingestion/workouts.py      # process screenshots from data/drop/workouts/
 python analytics/signals.py       # compute SMA50/200 + Supertrend signals
-python analytics/alerts.py        # check direction flips, fire macOS notifications
+python analytics/alerts.py        # check direction flips, record deduped alerts, optionally notify
 python scripts/update_watchlist.py  # refresh Nasdaq-100 tickers from Wikipedia
 python mcp_client/client.py       # run old agent (REPL)
 python langgraph_client/client.py # run new agent (incomplete)
@@ -74,7 +74,7 @@ No test suite. No linter configured.
 |----------|--------|--------|
 | Database | DuckDB | Analytical queries, local file, no server |
 | AI runtime | Ollama (local) | Personal data must not leave the machine |
-| Scheduling | launchd (not cron) | cron skips when Mac sleeps; launchd runs on wake |
+| Scheduling | systemd user timer | Runs under the `openclaw` service user; linger is enabled |
 | Supertrend bands | Manual pandas | pandas-ta fails on Python 3.14 (numba won't build) |
 | SMA | `ta` library | Same reason — pandas-ta broken |
 | Weekly signals | Resample daily OHLCV with `resample("W-FRI")` | Don't fetch weekly bars from yfinance |
@@ -103,7 +103,7 @@ No test suite. No linter configured.
 - `config/settings.py` — single source of truth for all paths/models
 - `config/watchlist.txt` custom periods — `INTC 7y`, `BTC-USD max`, `MSFT 10y`, `V 10y`, `NET 7y`, `SNOW 5y`
 - Supertrend implementation in `analytics/signals.py` — verified correct against Pine Script
-- Scheduling mechanism — launchd only, `TZ=America/Phoenix`, 5pm MST
+- Scheduling mechanism — systemd user timer under `openclaw`, `TZ=America/Phoenix`, 5pm MST
 
 ---
 

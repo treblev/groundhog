@@ -4,6 +4,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import hashlib
+import os
+import platform
+import shutil
 import subprocess
 from datetime import date
 
@@ -34,8 +37,37 @@ def _record_alert(con, alert_id, date, ticker, alert_type, message) -> None:
 
 
 def _notify(title: str, message: str) -> None:
-    script = f'display notification "{message}" with title "{title}"'
-    subprocess.run(["osascript", "-e", script], check=False)
+    backend = os.environ.get("GROUNDHOG_ALERT_BACKEND", "auto").lower()
+    if backend in {"none", "off", "disabled"}:
+        return
+
+    system = platform.system()
+    if backend == "auto":
+        if system == "Darwin":
+            backend = "osascript"
+        elif system == "Linux" and shutil.which("notify-send"):
+            backend = "notify-send"
+        else:
+            backend = "stdout"
+
+    if backend == "osascript":
+        if not shutil.which("osascript"):
+            print(f"  Notification skipped: osascript not found. {message}")
+            return
+        escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
+        escaped_message = message.replace("\\", "\\\\").replace('"', '\\"')
+        script = f'display notification "{escaped_message}" with title "{escaped_title}"'
+        subprocess.run(["osascript", "-e", script], check=False)
+        return
+
+    if backend == "notify-send":
+        if not shutil.which("notify-send"):
+            print(f"  Notification skipped: notify-send not found. {message}")
+            return
+        subprocess.run(["notify-send", title, message], check=False)
+        return
+
+    print(f"  {title}: {message}")
 
 
 def _check_sma_cross(con, ticker: str) -> None:
