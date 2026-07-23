@@ -10,6 +10,23 @@ Current Linux deployment assumptions:
 - Ollama: `http://192.168.1.13:11434`
 - Privacy: local Ollama only; no OpenAI or Anthropic fallback
 
+## Ollama Access
+
+When Groundhog runs on Linux but Ollama runs on the Mac, set `OLLAMA_HOST` so
+memory embeddings and live smoke tests use the Mac Ollama API instead of the
+Linux localhost default:
+
+```bash
+export OLLAMA_HOST=http://192.168.1.13:11434
+```
+
+Verify from Linux:
+
+```bash
+curl http://192.168.1.13:11434/api/tags
+OLLAMA_HOST=http://192.168.1.13:11434 venv/bin/python tests/smoke_test.py
+```
+
 ## Stock Jobs
 
 The stock pipeline should run as the `openclaw` user:
