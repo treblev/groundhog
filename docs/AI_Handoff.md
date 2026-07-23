@@ -54,9 +54,6 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 
 ## 4. Current TODOs and Open Bugs
 
-**Next:**
-- Add automated smoke/regression tests for stock ingestion, including a test that verifies an incremental run requests and processes only dates newer than the latest stored row instead of fetching the full history.
-
 **In progress:**
 - See `TODO.md` for current `langgraph_client` work: `ToolRetryMiddleware` for malformed tool calls, a `write_todos` mutable planning tool, and prompting the agent to revisit its plan after each tool result.
 
@@ -130,7 +127,11 @@ python mcp_client/client.py
 # Agent (new LangGraph — incomplete)
 python langgraph_client/client.py
 
-# No test suite yet. No linter configured.
+# Tests
+python -m unittest discover -s tests -p 'test_*.py'  # offline regression tests
+python tests/smoke_test.py                           # live DB and Ollama checks
+
+# No linter configured.
 ```
 
 ---

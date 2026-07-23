@@ -48,9 +48,11 @@ python analytics/alerts.py        # check direction flips, record deduped alerts
 python scripts/update_watchlist.py  # refresh Nasdaq-100 tickers from Wikipedia
 python mcp_client/client.py       # run old agent (REPL)
 python langgraph_client/client.py # run new agent (incomplete)
+python -m unittest discover -s tests -p 'test_*.py'  # offline regression tests
+python tests/smoke_test.py        # live DB, MCP imports, and Ollama memory checks
 ```
 
-No test suite. No linter configured.
+No linter configured.
 
 ---
 
@@ -109,6 +111,8 @@ No test suite. No linter configured.
 
 ## How to Verify Work Is Done
 
+- **Regression suite**: `python -m unittest discover -s tests -p 'test_*.py'`
+- **Live smoke suite**: `python tests/smoke_test.py`
 - **Ingestion**: run the script, check printed row counts; query DuckDB directly
 - **Signals**: `SELECT COUNT(*) FROM stock_signals WHERE date = (SELECT MAX(date) FROM stock_signals);`
 - **Alerts**: `SELECT * FROM stock_alerts ORDER BY notified_at DESC LIMIT 10;`

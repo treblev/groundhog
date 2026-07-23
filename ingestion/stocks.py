@@ -16,10 +16,21 @@ def _fetch_history(ticker: str, period: str, start_date: date | None = None):
     if start_date is None:
         data = yf.Ticker(ticker).history(period=period)
     else:
-        data = yf.Ticker(ticker).history(start=start_date.isoformat())
+        end_date = date.today() + timedelta(days=1)
+        data = yf.Ticker(ticker).history(
+            period=None,
+            start=start_date.isoformat(),
+            end=end_date.isoformat(),
+        )
     if data.empty:
         return []
     data.index = data.index.tz_localize(None)
+
+    if start_date is not None:
+        data = data[
+            (data.index.date >= start_date)
+            & (data.index.date < end_date)
+        ]
 
     def _safe(val):
         f = float(val)
