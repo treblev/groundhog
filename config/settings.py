@@ -13,6 +13,9 @@ SLEEP_DROP_FOLDER = BASE_DIR / "data" / "drop" / "sleep8"
 WORKOUTS_DROP_FOLDER = BASE_DIR / "data" / "drop" / "workouts"
 OLLAMA_VISION_MODEL = "qwen3-vl:latest"
 OLLAMA_SQL_MODEL = "qwen3.6:latest"
+OLLAMA_BASE_URL = "http://192.168.1.13:11434"
+OLLAMA_CHAT_URL = f"{OLLAMA_BASE_URL}/api/chat"
+OLLAMA_EMBEDDINGS_URL = f"{OLLAMA_BASE_URL}/api/embeddings"
 
 WATCHLIST_FILE = BASE_DIR / "config" / "watchlist.txt"
 

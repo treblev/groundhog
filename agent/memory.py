@@ -4,25 +4,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import hashlib
-import os
 
 import duckdb
 import httpx
 
-DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+from config.settings import OLLAMA_EMBEDDINGS_URL
+
 EMBED_MODEL = "nomic-embed-text"
-
-
-def _ollama_embeddings_url() -> str:
-    host = os.environ.get("OLLAMA_HOST", DEFAULT_OLLAMA_HOST).rstrip("/")
-    if not host.startswith(("http://", "https://")):
-        host = f"http://{host}"
-    return f"{host}/api/embeddings"
 
 
 def _embed(text: str) -> list[float]:
     response = httpx.post(
-        _ollama_embeddings_url(),
+        OLLAMA_EMBEDDINGS_URL,
         json={"model": EMBED_MODEL, "prompt": text},
         timeout=30.0,
     )

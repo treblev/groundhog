@@ -12,19 +12,15 @@ Current Linux deployment assumptions:
 
 ## Ollama Access
 
-When Groundhog runs on Linux but Ollama runs on the Mac, set `OLLAMA_HOST` so
-memory embeddings and live smoke tests use the Mac Ollama API instead of the
-Linux localhost default:
-
-```bash
-export OLLAMA_HOST=http://192.168.1.13:11434
-```
+When Groundhog runs on Linux but Ollama runs on the Mac, the Mac Ollama base URL
+is configured explicitly in `config/settings.py` as
+`OLLAMA_BASE_URL=http://192.168.1.13:11434`.
 
 Verify from Linux:
 
 ```bash
 curl http://192.168.1.13:11434/api/tags
-OLLAMA_HOST=http://192.168.1.13:11434 venv/bin/python tests/smoke_test.py
+venv/bin/python tests/smoke_test.py
 ```
 
 ## Stock Jobs

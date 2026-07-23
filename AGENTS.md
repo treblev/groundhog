@@ -30,7 +30,7 @@ python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 python ingestion/schema.py   # create tables (idempotent)
 # Ollama must be running: ollama serve
-# Models needed: qwen3:32b, qwen3-vl:latest
+# Models needed: qwen3.6:latest, qwen3-vl:latest, nomic-embed-text
 ```
 
 No environment variables needed. All config in `config/settings.py`.
@@ -58,7 +58,7 @@ No linter configured.
 
 ## Coding Conventions
 
-- All paths and model names live in `config/settings.py` — no hardcoded values anywhere else
+- All paths, model names, and Ollama URLs live in `config/settings.py` — no hardcoded values anywhere else
 - `data/` is gitignored — never commit personal data or the `.duckdb` file
 - AI is local-only via Ollama — never call OpenAI/Anthropic with personal data
 - Every script must be idempotent (safe to re-run)

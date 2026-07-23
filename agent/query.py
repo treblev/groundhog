@@ -9,10 +9,10 @@ import re
 import duckdb
 import httpx
 
-from config.settings import DB_PATH, OLLAMA_SQL_MODEL
+from config.settings import DB_PATH, OLLAMA_CHAT_URL, OLLAMA_SQL_MODEL
 from agent.memory import remember, recall
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = OLLAMA_CHAT_URL
 MAX_TOOL_ROUNDS = 8
 
 # --- Tool definitions sent to the model ---
@@ -229,7 +229,7 @@ def _chat(messages: list, tools: bool = True) -> dict:
 def _chat_with_retry(messages: list, tools: bool = True, max_retries: int = 2) -> dict:
     """Call the model, retrying if it comes back with neither a tool call nor any
     content — an empty response that would otherwise be silently accepted as the
-    final answer. Seen intermittently (both qwen3:32b and qwen3.6)."""
+    final answer. Seen intermittently with qwen3.6."""
     message: dict = {}
     for attempt in range(max_retries + 1):
         message = _chat(messages, tools=tools)

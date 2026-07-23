@@ -25,7 +25,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 - **Analytics**: SMA50/200 crossover, Supertrend (daily + weekly) → `stock_signals` → `stock_alerts`
 - **Agent**: MCP tool server (stdio JSON-RPC) + LangGraph client (`create_agent()`), replacing the hand-rolled loop
 - **Scheduling**: Linux systemd user timer under `openclaw`
-- **AI**: Ollama local only. `qwen3:32b` for SQL/text, `qwen3-vl:latest` for vision. No external API calls with personal data.
+- **AI**: Ollama local only. `qwen3.6:latest` for SQL/text, `qwen3-vl:latest` for vision, `nomic-embed-text` for memory embeddings. No external API calls with personal data.
 
 ---
 
@@ -33,7 +33,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 
 | File | Purpose |
 |------|---------|
-| `config/settings.py` | All paths and model names. Single source of truth. |
+| `config/settings.py` | All paths, model names, and Ollama URLs. Single source of truth. |
 | `config/watchlist.txt` | 105 tickers (6 custom periods + 99 Nasdaq-100 at 2y) |
 | `ingestion/schema.py` | Idempotent table creation. All `ALTER TABLE ADD COLUMN IF NOT EXISTS`. |
 | `ingestion/stocks.py` | yfinance OHLCV fetch → DuckDB upsert. NaN→None via `_safe()`. |
@@ -87,7 +87,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 
 ## 6. Coding Conventions
 
-- All config (paths, model names) in `config/settings.py`. No hardcoded paths elsewhere.
+- All config (paths, model names, and Ollama URLs) in `config/settings.py`. No hardcoded paths elsewhere.
 - `data/` is gitignored. Never commit personal data or the DuckDB file.
 - All DB operations: `ON CONFLICT DO NOTHING` or `ON CONFLICT DO UPDATE SET` (not `INSERT OR REPLACE` — that's SQLite syntax, doesn't exist in DuckDB)
 - Idempotent scripts: safe to re-run any ingestion or analytics script
@@ -152,6 +152,12 @@ GROUNDHOG_ALERT_BACKEND=none
 
 The systemd timer is pinned to `America/Phoenix`.
 
+Ollama base URL is configured in `config/settings.py`:
+
+```python
+OLLAMA_BASE_URL = "http://192.168.1.13:11434"
+```
+
 ---
 
 ## 9. Database Schema Assumptions
@@ -188,7 +194,7 @@ All tables created idempotently by `ingestion/schema.py`.
 |---------|---------|-------|
 | yfinance | Stock OHLCV data | Free, no auth needed |
 | Wikipedia | Nasdaq-100 ticker list | Requires httpx + browser User-Agent; urllib gets 403 |
-| Ollama | LLM inference | Must be running locally; models: qwen3:32b, qwen3-vl:latest |
+| Ollama | LLM inference | Must be reachable at `OLLAMA_BASE_URL`; models: qwen3.6:latest, qwen3-vl:latest, nomic-embed-text |
 | notify-send / osascript / stdout | Optional local notification backend | `GROUNDHOG_ALERT_BACKEND=auto|none|notify-send|osascript|stdout` |
 
 No external APIs receive personal data. No API keys needed.
@@ -248,6 +254,6 @@ In order (most recent last):
 
 See `TODO.md` for the current punch list on `langgraph_client/client.py`:
 
-1. Add `ToolRetryMiddleware` (from `langchain.agents.middleware`) — `qwen3:32b` occasionally emits a tool call as literal text content instead of a structured `tool_calls` entry, and nothing currently catches it.
+1. Add `ToolRetryMiddleware` (from `langchain.agents.middleware`) — `qwen3.6:latest` occasionally emits a tool call as literal text content instead of a structured `tool_calls` entry, and nothing currently catches it.
 2. Add a `write_todos`-style mutable planning tool the agent can call and revise mid-loop, instead of a frozen upfront plan.
 3. Add replanning: prompt the agent to check each new tool result against its current plan before proceeding, rather than assuming a mutable todo list alone fixes plan-drift bugs.

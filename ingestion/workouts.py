@@ -15,9 +15,9 @@ from typing import Optional
 import duckdb
 import httpx
 
-from config.settings import DB_PATH, WORKOUTS_DROP_FOLDER, OLLAMA_VISION_MODEL
+from config.settings import DB_PATH, OLLAMA_CHAT_URL, WORKOUTS_DROP_FOLDER, OLLAMA_VISION_MODEL
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = OLLAMA_CHAT_URL
 PROCESSED_DIR = WORKOUTS_DROP_FOLDER / "processed"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 

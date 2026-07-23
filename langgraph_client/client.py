@@ -6,10 +6,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import asyncio
 
 from langchain.agents import create_agent
+from langchain_ollama import ChatOllama
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
 
-from config.settings import OLLAMA_SQL_MODEL
+from config.settings import OLLAMA_BASE_URL, OLLAMA_SQL_MODEL
 
 SERVER_SCRIPT = str(Path(__file__).resolve().parent.parent / "mcp_server" / "server.py")
 
@@ -95,7 +96,7 @@ async def run():
             tools = _make_tools(session)
 
             agent = create_agent(
-                model=f"ollama:{OLLAMA_SQL_MODEL}",
+                model=ChatOllama(model=OLLAMA_SQL_MODEL, base_url=OLLAMA_BASE_URL),
                 tools=tools,
                 system_prompt=(
                     "You are a personal data assistant with access to tools that query a local database.\n"

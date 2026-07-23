@@ -11,9 +11,9 @@ import httpx
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
 
-from config.settings import OLLAMA_SQL_MODEL
+from config.settings import OLLAMA_CHAT_URL, OLLAMA_SQL_MODEL
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = OLLAMA_CHAT_URL
 MAX_TOOL_ROUNDS = 8
 SERVER_SCRIPT = str(Path(__file__).resolve().parent.parent / "mcp_server" / "server.py")
 
