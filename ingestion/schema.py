@@ -157,6 +157,17 @@ def init_db(db_path: Path | str | None = None):
         )
     """)
 
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS outbox (
+            id VARCHAR PRIMARY KEY,
+            event_id VARCHAR UNIQUE NOT NULL,
+            status VARCHAR NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            delivered_at TIMESTAMP,
+            delivery_error TEXT
+        )
+    """)
+
     con.close()
 
 if __name__ == "__main__":

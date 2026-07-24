@@ -12,7 +12,8 @@ from datetime import date
 
 import duckdb
 
-from agent.events import record_event
+from agent.events import event_id_for, record_event
+from agent.outbox import enqueue_event
 from config.settings import DB_PATH
 
 
@@ -72,6 +73,7 @@ def _record_alert_event(
     alert_type: str,
     message: str,
 ) -> None:
+    dedupe_key = f"stock_alert:{alert_id}"
     record_event(
         con,
         event_type="stock_alert_created",
@@ -84,8 +86,9 @@ def _record_alert_event(
             "alert_type": alert_type,
             "message": message,
         },
-        dedupe_key=f"stock_alert:{alert_id}",
+        dedupe_key=dedupe_key,
     )
+    enqueue_event(con, event_id_for(dedupe_key))
 
 
 def _notify(title: str, message: str) -> None:

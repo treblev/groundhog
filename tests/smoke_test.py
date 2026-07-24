@@ -32,6 +32,7 @@ MODULES = [
     "agent.memory",
     "agent.runs",
     "agent.events",
+    "agent.outbox",
     "analytics.signals",
     "analytics.alerts",
     "scripts.daily_stocks",

@@ -68,6 +68,17 @@ Event conventions:
 - Events are idempotent: a stable `dedupe_key` means rerunning a job does not duplicate the same fact.
 - `payload` is JSON. It contains event-specific facts; delivery decisions belong to OpenClaw.
 
+Stock alerts create one `pending` outbox row. `pending`, `delivered`, `failed`,
+and `discarded` are the supported delivery statuses. Groundhog never sends an
+outbox item itself; OpenClaw will read and update this table through MCP in a
+later phase.
+
+Inspect pending delivery items with their source facts:
+
+```bash
+venv/bin/python -c "import duckdb; from config.settings import DB_PATH; con = duckdb.connect(str(DB_PATH)); print(con.execute(\"SELECT o.id, e.event_type, e.payload, o.created_at FROM outbox o JOIN events e ON e.id = o.event_id WHERE o.status = 'pending' ORDER BY o.created_at\").fetchall())"
+```
+
 ## systemd User Timer
 
 Install the user service and timer as `openclaw`:

@@ -146,7 +146,7 @@ created them.
 
 ## Phase 3: Outbox Table
 
-Status: Planned
+Status: In review
 
 ### Goal
 
@@ -154,16 +154,16 @@ Separate "something happened" from "tell the user about it."
 
 ### Tasks
 
-- [ ] Design `outbox` schema.
-- [ ] Add `outbox` table to `ingestion/schema.py`.
-- [ ] Define delivery statuses.
-- [ ] Add helper for creating outbox rows from events.
-- [ ] Add tests for pending outbox rows.
-- [ ] Add tests for delivery status updates.
-- [ ] Decide which stock alerts create outbox rows.
-- [ ] Update docs with Groundhog/OpenClaw delivery boundary.
-- [ ] Run offline regression tests.
-- [ ] Run live smoke tests.
+- [x] Design `outbox` schema.
+- [x] Add `outbox` table to `ingestion/schema.py`.
+- [x] Define delivery statuses.
+- [x] Add helper for creating outbox rows from events.
+- [x] Add tests for pending outbox rows.
+- [x] Add tests for delivery status updates.
+- [x] Decide which stock alerts create outbox rows.
+- [x] Update docs with Groundhog/OpenClaw delivery boundary.
+- [x] Run offline regression tests.
+- [x] Run live smoke tests.
 
 ### Review Gate
 

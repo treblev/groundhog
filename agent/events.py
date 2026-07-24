@@ -16,7 +16,8 @@ EVENT_TYPES = {
 }
 
 
-def _event_id(dedupe_key: str) -> str:
+def event_id_for(dedupe_key: str) -> str:
+    """Return the deterministic ID assigned to a dedupe key."""
     return hashlib.sha256(dedupe_key.encode()).hexdigest()
 
 
@@ -46,7 +47,7 @@ def record_event(
         ON CONFLICT (dedupe_key) DO NOTHING
         """,
         [
-            _event_id(dedupe_key),
+            event_id_for(dedupe_key),
             event_type,
             source,
             subject_type,

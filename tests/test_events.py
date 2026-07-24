@@ -11,6 +11,7 @@ import duckdb
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent import events
+from agent import outbox
 from analytics import alerts
 from ingestion import schema
 from scripts import daily_stocks
@@ -124,10 +125,12 @@ class EventTests(unittest.TestCase):
             event_payloads = con.execute(
                 "SELECT payload::VARCHAR FROM events WHERE event_type = 'stock_signal_flipped'"
             ).fetchall()
+            outbox_rows = con.execute("SELECT status FROM outbox").fetchall()
         finally:
             con.close()
 
         self.assertEqual(event_types, [("stock_alert_created",), ("stock_signal_flipped",)])
+        self.assertEqual(outbox_rows, [("pending",)])
         self.assertEqual(
             json.loads(event_payloads[0][0]),
             {
@@ -139,6 +142,43 @@ class EventTests(unittest.TestCase):
                 "timeframe": "daily",
             },
         )
+
+    def test_outbox_is_idempotent_and_tracks_delivery_status(self):
+        con = self._connection()
+        try:
+            event_key = "stock_alert:test-alert"
+            events.record_event(
+                con,
+                event_type="stock_alert_created",
+                source="tests",
+                subject_type="stock_alert",
+                subject_id="test-alert",
+                payload={"ticker": "TEST"},
+                dedupe_key=event_key,
+            )
+            event_id = events.event_id_for(event_key)
+            created = outbox.enqueue_event(con, event_id)
+            duplicate = outbox.enqueue_event(con, event_id)
+            outbox_id = con.execute(
+                "SELECT id FROM outbox WHERE event_id = ?", [event_id]
+            ).fetchone()[0]
+            outbox.set_outbox_status(con, outbox_id, "failed", "gateway unavailable")
+            failed = con.execute(
+                "SELECT status, delivered_at, delivery_error FROM outbox WHERE id = ?", [outbox_id]
+            ).fetchone()
+            outbox.set_outbox_status(con, outbox_id, "delivered")
+            delivered = con.execute(
+                "SELECT status, delivered_at, delivery_error FROM outbox WHERE id = ?", [outbox_id]
+            ).fetchone()
+        finally:
+            con.close()
+
+        self.assertTrue(created)
+        self.assertFalse(duplicate)
+        self.assertEqual(failed, ("failed", None, "gateway unavailable"))
+        self.assertEqual(delivered[0], "delivered")
+        self.assertIsNotNone(delivered[1])
+        self.assertIsNone(delivered[2])
 
 
 if __name__ == "__main__":
