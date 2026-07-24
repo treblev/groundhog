@@ -41,7 +41,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 | `ingestion/workouts.py` | Drops SugarWOD screenshots → vision LLM → workouts upsert. Hash-based dedup ID. |
 | `analytics/signals.py` | SMA50/200 + Supertrend (daily+weekly). Uses `ta` lib for SMA, manual pandas for Supertrend. |
 | `analytics/alerts.py` | Reads signal direction flips → optional notification → stock_alerts dedup. |
-| `mcp_server/server.py` | MCP stdio tool server. Tools: run_sql, get_latest_price, get_recent_activities, get_health_summary, remember, recall. **Do not modify.** |
+| `mcp_server/server.py` | MCP stdio tool server. Core data tools plus documented service-state tools in `docs/OpenClaw_MCP.md`. |
 | `mcp_client/client.py` | Old hand-rolled agent loop. Replaced. Keep for reference. |
 | `langgraph_client/client.py` | Active agent. Uses LangChain's `create_agent()` with MCP tools wrapped as async Python functions. |
 | `groundhog_service.py` | Service CLI: `run daily-stocks` and `status` |

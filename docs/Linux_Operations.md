@@ -125,5 +125,6 @@ as its boundary with OpenClaw:
 - Delivery state remains outside Groundhog, except for local dedupe tables such
   as `stock_alerts`.
 
-Do not modify `mcp_server/server.py` for this migration unless the OpenClaw MCP
-contract changes.
+Groundhog's service-state MCP contract is documented in `docs/OpenClaw_MCP.md`.
+Changes to those tool names or JSON result shapes require an OpenClaw contract
+review.

@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import asyncio
+import json
 
 import duckdb
 from mcp.server import Server
@@ -11,9 +12,12 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 from agent.memory import remember, recall
+from agent.outbox import set_outbox_status
 from config.settings import DB_PATH
+from ingestion.schema import init_db
 
 server = Server("groundhog")
+init_db(DB_PATH)
 con = duckdb.connect(str(DB_PATH))
 
 
@@ -77,6 +81,47 @@ async def list_tools() -> list[Tool]:
                 "required": ["query"],
             },
         ),
+        Tool(
+            name="get_recent_events",
+            description="Get recent durable Groundhog service events.",
+            inputSchema={
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "description": "Number of events to return. Default 20."}},
+                "required": [],
+            },
+        ),
+        Tool(
+            name="get_pending_outbox",
+            description="Get pending Groundhog delivery items with their source event data.",
+            inputSchema={
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "description": "Number of items to return. Default 20."}},
+                "required": [],
+            },
+        ),
+        Tool(
+            name="get_agent_run_status",
+            description="Get the most recent Groundhog scheduled job run and its outcome.",
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
+        Tool(
+            name="get_latest_alerts",
+            description="Get recent deduplicated stock alerts recorded by Groundhog.",
+            inputSchema={
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "description": "Number of alerts to return. Default 10."}},
+                "required": [],
+            },
+        ),
+        Tool(
+            name="mark_outbox_delivered",
+            description="Mark one pending Groundhog outbox item as delivered after OpenClaw sends it.",
+            inputSchema={
+                "type": "object",
+                "properties": {"outbox_id": {"type": "string", "description": "The outbox item ID to mark delivered."}},
+                "required": ["outbox_id"],
+            },
+        ),
     ]
 
 
@@ -126,7 +171,69 @@ def _dispatch(name: str, args: dict) -> str:
     if name == "recall":
         return recall(con, args["query"], args.get("top_k", 3))
 
+    if name == "get_recent_events":
+        return _query_json(
+            """
+            SELECT event_type, source, subject_type, subject_id, occurred_at, payload
+            FROM events
+            ORDER BY occurred_at DESC
+            LIMIT ?
+            """,
+            [args.get("limit", 20)],
+        )
+
+    if name == "get_pending_outbox":
+        return _query_json(
+            """
+            SELECT o.id, e.event_type, e.subject_type, e.subject_id, e.payload, o.created_at
+            FROM outbox o
+            JOIN events e ON e.id = o.event_id
+            WHERE o.status = 'pending'
+            ORDER BY o.created_at
+            LIMIT ?
+            """,
+            [args.get("limit", 20)],
+        )
+
+    if name == "get_agent_run_status":
+        return _query_json(
+            """
+            SELECT job_name, status, started_at, finished_at, error_text
+            FROM agent_runs
+            ORDER BY started_at DESC
+            LIMIT 1
+            """
+        )
+
+    if name == "get_latest_alerts":
+        return _query_json(
+            """
+            SELECT date, ticker, alert_type, message, notified_at
+            FROM stock_alerts
+            ORDER BY notified_at DESC
+            LIMIT ?
+            """,
+            [args.get("limit", 10)],
+        )
+
+    if name == "mark_outbox_delivered":
+        outbox_id = args["outbox_id"]
+        row = con.execute("SELECT id FROM outbox WHERE id = ?", [outbox_id]).fetchone()
+        if row is None:
+            return json.dumps({"error": f"No outbox item found for '{outbox_id}'."})
+        set_outbox_status(con, outbox_id, "delivered")
+        return _query_json(
+            "SELECT id, status, delivered_at FROM outbox WHERE id = ?", [outbox_id]
+        )
+
     return f"Unknown tool: {name}"
+
+
+def _query_json(query: str, parameters: list | None = None) -> str:
+    cursor = con.execute(query, parameters or [])
+    columns = [column[0] for column in cursor.description]
+    rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    return json.dumps(rows, default=str)
 
 
 async def main():

@@ -47,7 +47,7 @@ def set_outbox_status(
         con.execute(
             """
             UPDATE outbox
-            SET status = ?, delivered_at = CURRENT_TIMESTAMP, delivery_error = NULL
+            SET status = ?, delivered_at = COALESCE(delivered_at, CURRENT_TIMESTAMP), delivery_error = NULL
             WHERE id = ?
             """,
             [status, outbox_id],

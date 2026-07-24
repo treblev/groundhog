@@ -72,6 +72,14 @@ def run() -> None:
     check("get_recent_activities", lambda: q._get_recent_activities(con, 3))
     check("get_health_summary", lambda: q._get_health_summary(con, "2026-01-01"))
 
+    import mcp_server.server as mcp
+
+    print("\n=== MCP service tools ===")
+    check("get_recent_events", lambda: mcp._dispatch("get_recent_events", {"limit": 1}))
+    check("get_pending_outbox", lambda: mcp._dispatch("get_pending_outbox", {"limit": 1}))
+    check("get_agent_run_status", lambda: mcp._dispatch("get_agent_run_status", {}))
+    check("get_latest_alerts", lambda: mcp._dispatch("get_latest_alerts", {"limit": 1}))
+
     print("\n=== Memory tools (write + read, cleaned up after) ===")
     test_fact = "SMOKE_TEST_FACT -- safe to ignore, deleted automatically by tests/smoke_test.py"
     check("remember", lambda: mem.remember(con, test_fact))

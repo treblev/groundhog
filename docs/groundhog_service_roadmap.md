@@ -199,7 +199,7 @@ database and journal.
 
 ## Phase 5: MCP Service Tools
 
-Status: Planned
+Status: In review
 
 ### Goal
 
@@ -207,16 +207,16 @@ OpenClaw can inspect Groundhog's service state through MCP tools.
 
 ### Tasks
 
-- [ ] Design tool contracts before editing `mcp_server/server.py`.
-- [ ] Add `get_recent_events`.
-- [ ] Add `get_pending_outbox`.
-- [ ] Add `get_agent_run_status`.
-- [ ] Add `get_latest_alerts`.
-- [ ] Add `mark_outbox_delivered`.
-- [ ] Add smoke coverage for new MCP tools.
-- [ ] Update OpenClaw MCP notes.
-- [ ] Run offline regression tests.
-- [ ] Run live smoke tests.
+- [x] Design tool contracts before editing `mcp_server/server.py`.
+- [x] Add `get_recent_events`.
+- [x] Add `get_pending_outbox`.
+- [x] Add `get_agent_run_status`.
+- [x] Add `get_latest_alerts`.
+- [x] Add `mark_outbox_delivered`.
+- [x] Add smoke coverage for new MCP tools.
+- [x] Update OpenClaw MCP notes.
+- [x] Run offline regression tests.
+- [x] Run live smoke tests.
 
 ### Review Gate
 
