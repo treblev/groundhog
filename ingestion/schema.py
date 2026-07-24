@@ -143,6 +143,20 @@ def init_db(db_path: Path | str | None = None):
         )
     """)
 
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS events (
+            id VARCHAR PRIMARY KEY,
+            event_type VARCHAR NOT NULL,
+            source VARCHAR NOT NULL,
+            subject_type VARCHAR NOT NULL,
+            subject_id VARCHAR NOT NULL,
+            dedupe_key VARCHAR UNIQUE NOT NULL,
+            occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            payload JSON NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     con.close()
 
 if __name__ == "__main__":

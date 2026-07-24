@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import duckdb
 
+from agent.events import record_event
 from agent.runs import finish_run, start_run
 from analytics import alerts, signals
 from config.settings import DB_PATH
@@ -19,7 +20,26 @@ JOB_NAME = "daily_stocks"
 def _finish(run_id: str, status: str, error_text: str | None = None) -> None:
     con = duckdb.connect(str(DB_PATH))
     try:
+        con.execute("BEGIN")
         finish_run(con, run_id, status, error_text)
+        event_type = "job_completed" if status == "succeeded" else "job_failed"
+        record_event(
+            con,
+            event_type=event_type,
+            source="scripts.daily_stocks",
+            subject_type="agent_run",
+            subject_id=run_id,
+            payload={
+                "job_name": JOB_NAME,
+                "status": status,
+                "error_text": error_text,
+            },
+            dedupe_key=f"agent_run:{run_id}:{event_type}",
+        )
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
     finally:
         con.close()
 

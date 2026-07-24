@@ -1,0 +1,145 @@
+import json
+import sys
+import tempfile
+import unittest
+from datetime import date
+from pathlib import Path
+from unittest.mock import patch
+
+import duckdb
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from agent import events
+from analytics import alerts
+from ingestion import schema
+from scripts import daily_stocks
+
+
+class EventTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "groundhog.duckdb"
+        schema.init_db(self.db_path)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _connection(self):
+        return duckdb.connect(str(self.db_path))
+
+    def test_event_recording_is_idempotent_and_keeps_json_payload(self):
+        con = self._connection()
+        try:
+            created = events.record_event(
+                con,
+                event_type="job_completed",
+                source="tests",
+                subject_type="agent_run",
+                subject_id="run-1",
+                payload={"job_name": "daily_stocks", "status": "succeeded"},
+                dedupe_key="agent_run:run-1:job_completed",
+            )
+            duplicate = events.record_event(
+                con,
+                event_type="job_completed",
+                source="tests",
+                subject_type="agent_run",
+                subject_id="run-1",
+                payload={"job_name": "daily_stocks", "status": "succeeded"},
+                dedupe_key="agent_run:run-1:job_completed",
+            )
+            row = con.execute(
+                "SELECT event_type, source, subject_type, subject_id, payload::VARCHAR FROM events"
+            ).fetchone()
+        finally:
+            con.close()
+
+        self.assertTrue(created)
+        self.assertFalse(duplicate)
+        self.assertEqual(row[:4], ("job_completed", "tests", "agent_run", "run-1"))
+        self.assertEqual(
+            json.loads(row[4]), {"job_name": "daily_stocks", "status": "succeeded"}
+        )
+
+    def test_daily_pipeline_records_completed_event(self):
+        with (
+            patch.object(daily_stocks, "DB_PATH", self.db_path),
+            patch.object(daily_stocks.stocks, "run"),
+            patch.object(daily_stocks.signals, "run"),
+            patch.object(daily_stocks.alerts, "run"),
+        ):
+            daily_stocks.run()
+
+        con = self._connection()
+        try:
+            row = con.execute(
+                "SELECT event_type, source, subject_type, payload::VARCHAR FROM events"
+            ).fetchone()
+        finally:
+            con.close()
+
+        self.assertEqual(row[:3], ("job_completed", "scripts.daily_stocks", "agent_run"))
+        self.assertEqual(json.loads(row[3])["status"], "succeeded")
+
+    def test_daily_pipeline_records_failed_event(self):
+        with (
+            patch.object(daily_stocks, "DB_PATH", self.db_path),
+            patch.object(daily_stocks.stocks, "run", side_effect=RuntimeError("fetch failed")),
+            patch.object(daily_stocks.signals, "run"),
+            patch.object(daily_stocks.alerts, "run"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "fetch failed"):
+                daily_stocks.run()
+
+        con = self._connection()
+        try:
+            row = con.execute(
+                "SELECT event_type, payload::VARCHAR FROM events"
+            ).fetchone()
+        finally:
+            con.close()
+
+        self.assertEqual(row[0], "job_failed")
+        self.assertIn("RuntimeError: fetch failed", json.loads(row[1])["error_text"])
+
+    def test_sma_signal_flip_creates_signal_and_alert_events_once(self):
+        con = self._connection()
+        try:
+            con.execute(
+                """
+                INSERT INTO stock_signals (id, date, ticker, signal_type, timeframe, value, direction)
+                VALUES
+                    ('old', '2026-07-20', 'TEST', 'sma_cross', 'daily', 1.0, 'bearish'),
+                    ('new', '2026-07-21', 'TEST', 'sma_cross', 'daily', 2.0, 'bullish')
+                """
+            )
+            with patch.object(alerts, "_notify"):
+                alerts._check_sma_cross(con, "TEST")
+                alerts._check_sma_cross(con, "TEST")
+
+            event_types = con.execute(
+                "SELECT event_type FROM events ORDER BY event_type"
+            ).fetchall()
+            event_payloads = con.execute(
+                "SELECT payload::VARCHAR FROM events WHERE event_type = 'stock_signal_flipped'"
+            ).fetchall()
+        finally:
+            con.close()
+
+        self.assertEqual(event_types, [("stock_alert_created",), ("stock_signal_flipped",)])
+        self.assertEqual(
+            json.loads(event_payloads[0][0]),
+            {
+                "date": date(2026, 7, 21).isoformat(),
+                "direction": "bullish",
+                "previous_direction": "bearish",
+                "signal_type": "sma_cross",
+                "ticker": "TEST",
+                "timeframe": "daily",
+            },
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

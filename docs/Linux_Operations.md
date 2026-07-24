@@ -54,6 +54,20 @@ Inspect the most recent job runs:
 venv/bin/python -c "import duckdb; from config.settings import DB_PATH; con = duckdb.connect(str(DB_PATH)); print(con.execute('SELECT job_name, status, started_at, finished_at, error_text FROM agent_runs ORDER BY started_at DESC LIMIT 10').fetchall())"
 ```
 
+Inspect recent Groundhog events:
+
+```bash
+venv/bin/python -c "import duckdb; from config.settings import DB_PATH; con = duckdb.connect(str(DB_PATH)); print(con.execute('SELECT event_type, source, subject_type, subject_id, occurred_at, payload FROM events ORDER BY occurred_at DESC LIMIT 20').fetchall())"
+```
+
+Event conventions:
+
+- `job_completed` and `job_failed` describe the complete scheduled pipeline.
+- `stock_signal_flipped` records a detected SMA or weekly Supertrend direction change.
+- `stock_alert_created` records an alert row after Groundhog creates it.
+- Events are idempotent: a stable `dedupe_key` means rerunning a job does not duplicate the same fact.
+- `payload` is JSON. It contains event-specific facts; delivery decisions belong to OpenClaw.
+
 ## systemd User Timer
 
 Install the user service and timer as `openclaw`:

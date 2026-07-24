@@ -107,7 +107,7 @@ User can answer: "Did Groundhog run today, and did it fail?"
 
 ## Phase 2: Events Table
 
-Status: Planned
+Status: In review
 
 ### Goal
 
@@ -116,18 +116,18 @@ which source table produced them.
 
 ### Tasks
 
-- [ ] Design `events` schema.
-- [ ] Add `events` table to `ingestion/schema.py`.
-- [ ] Define initial event kinds.
-- [ ] Add event writer helper.
-- [ ] Emit job failure events.
-- [ ] Emit stock signal flip events.
-- [ ] Emit stock alert created events.
-- [ ] Add tests for event idempotency.
-- [ ] Add tests for event payload shape.
-- [ ] Update docs with event kind conventions.
-- [ ] Run offline regression tests.
-- [ ] Run live smoke tests.
+- [x] Design `events` schema.
+- [x] Add `events` table to `ingestion/schema.py`.
+- [x] Define initial event kinds.
+- [x] Add event writer helper.
+- [x] Emit job failure events.
+- [x] Emit stock signal flip events.
+- [x] Emit stock alert created events.
+- [x] Add tests for event idempotency.
+- [x] Add tests for event payload shape.
+- [x] Update docs with event kind conventions.
+- [x] Run offline regression tests.
+- [x] Run live smoke tests.
 
 ### Initial Event Kinds
 

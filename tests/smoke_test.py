@@ -30,8 +30,11 @@ MODULES = [
     "ingestion.stocks",
     "agent.query",
     "agent.memory",
+    "agent.runs",
+    "agent.events",
     "analytics.signals",
     "analytics.alerts",
+    "scripts.daily_stocks",
     "mcp_server.server",
 ]
 

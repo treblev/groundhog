@@ -12,6 +12,7 @@ from datetime import date
 
 import duckdb
 
+from agent.events import record_event
 from config.settings import DB_PATH
 
 
@@ -33,6 +34,57 @@ def _record_alert(con, alert_id, date, ticker, alert_type, message) -> None:
         ON CONFLICT (id) DO NOTHING
         """,
         [alert_id, date, ticker, alert_type, message],
+    )
+
+
+def _record_signal_flip_event(
+    con: duckdb.DuckDBPyConnection,
+    ticker: str,
+    signal_type: str,
+    timeframe: str,
+    date: date,
+    previous_direction: str,
+    direction: str,
+) -> None:
+    record_event(
+        con,
+        event_type="stock_signal_flipped",
+        source="analytics.alerts",
+        subject_type="stock_signal",
+        subject_id=f"{ticker}:{signal_type}:{timeframe}:{date}",
+        payload={
+            "ticker": ticker,
+            "signal_type": signal_type,
+            "timeframe": timeframe,
+            "date": date.isoformat(),
+            "previous_direction": previous_direction,
+            "direction": direction,
+        },
+        dedupe_key=f"stock_signal_flip:{ticker}:{signal_type}:{timeframe}:{date}:{direction}",
+    )
+
+
+def _record_alert_event(
+    con: duckdb.DuckDBPyConnection,
+    alert_id: str,
+    date: date,
+    ticker: str,
+    alert_type: str,
+    message: str,
+) -> None:
+    record_event(
+        con,
+        event_type="stock_alert_created",
+        source="analytics.alerts",
+        subject_type="stock_alert",
+        subject_id=alert_id,
+        payload={
+            "date": date.isoformat(),
+            "ticker": ticker,
+            "alert_type": alert_type,
+            "message": message,
+        },
+        dedupe_key=f"stock_alert:{alert_id}",
     )
 
 
@@ -92,6 +144,10 @@ def _check_sma_cross(con, ticker: str) -> None:
     if today_dir == prev_dir:
         return
 
+    _record_signal_flip_event(
+        con, ticker, "sma_cross", "daily", today_date, prev_dir, today_dir
+    )
+
     if today_dir == "bullish":
         alert_type = "golden_cross"
         message = f"{ticker}: Golden Cross — SMA50 crossed above SMA200 (BUY signal)"
@@ -105,6 +161,7 @@ def _check_sma_cross(con, ticker: str) -> None:
 
     _notify("Groundhog Stock Alert", message)
     _record_alert(con, alert_id, today_date, ticker, alert_type, message)
+    _record_alert_event(con, alert_id, today_date, ticker, alert_type, message)
     print(f"  Alert fired: {message}")
 
 
@@ -130,6 +187,10 @@ def _check_supertrend_flip(con, ticker: str, timeframe: str) -> None:
     if today_dir == prev_dir:
         return
 
+    _record_signal_flip_event(
+        con, ticker, "supertrend", timeframe, today_date, prev_dir, today_dir
+    )
+
     label = f"supertrend_{timeframe}"
     if today_dir == "bullish":
         alert_type = f"{label}_bullish"
@@ -144,6 +205,7 @@ def _check_supertrend_flip(con, ticker: str, timeframe: str) -> None:
 
     _notify("Groundhog Stock Alert", message)
     _record_alert(con, alert_id, today_date, ticker, alert_type, message)
+    _record_alert_event(con, alert_id, today_date, ticker, alert_type, message)
     print(f"  Alert fired: {message}")
 
 
