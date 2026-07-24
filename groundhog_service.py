@@ -4,7 +4,7 @@ import json
 import signal
 import sys
 import traceback
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from threading import Event
 from zoneinfo import ZoneInfo
@@ -15,6 +15,7 @@ import duckdb
 
 from agent.events import record_event
 from agent.runs import finish_run, start_run
+from agent.summaries import generate_daily_summary, generate_weekly_review, prioritize_pending_outbox
 from analytics import alerts, signals
 from config.settings import DB_PATH
 from ingestion import stocks
@@ -180,6 +181,9 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("status", help="Print the latest service status as JSON.")
     daemon_parser = commands.add_parser("daemon", help="Poll for and run due Groundhog tasks.")
     daemon_parser.add_argument("--poll-seconds", type=int, default=60)
+    summary_parser = commands.add_parser("summarize", help="Generate a local derived summary.")
+    summary_parser.add_argument("kind", choices=["daily", "weekly"])
+    summary_parser.add_argument("--date", required=True, type=date.fromisoformat)
     args = parser.parse_args(argv)
 
     if args.command == "run":
@@ -188,6 +192,21 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "daemon":
         run_daemon(args.poll_seconds)
+        return 0
+
+    if args.command == "summarize":
+        init_db(DB_PATH)
+        con = duckdb.connect(str(DB_PATH))
+        try:
+            prioritize_pending_outbox(con)
+            content = (
+                generate_daily_summary(con, args.date)
+                if args.kind == "daily"
+                else generate_weekly_review(con, args.date)
+            )
+        finally:
+            con.close()
+        print(content)
         return 0
 
     print(json.dumps(get_status(), default=str, sort_keys=True))

@@ -248,7 +248,7 @@ Groundhog can run continuously and recover cleanly after restart.
 
 ## Phase 7: Agentic Reasoning
 
-Status: Planned
+Status: In review
 
 ### Goal
 
@@ -257,15 +257,15 @@ language interaction without letting it silently mutate core data.
 
 ### Tasks
 
-- [ ] Define allowed LLM actions.
-- [ ] Define forbidden LLM actions.
-- [ ] Add daily summary generation over events.
-- [ ] Add weekly review generation over events and metrics.
-- [ ] Add outbox prioritization.
-- [ ] Log LLM-generated summaries as derived artifacts.
-- [ ] Keep all LLM calls local via configured Ollama.
-- [ ] Add evaluation prompts for summaries.
-- [ ] Add review workflow before automated delivery.
+- [x] Define allowed LLM actions.
+- [x] Define forbidden LLM actions.
+- [x] Add daily summary generation over events.
+- [x] Add weekly review generation over events and metrics.
+- [x] Add outbox prioritization.
+- [x] Log LLM-generated summaries as derived artifacts.
+- [x] Keep all LLM calls local via configured Ollama.
+- [x] Add evaluation prompts for summaries.
+- [x] Add review workflow before automated delivery.
 
 ### Review Gate
 

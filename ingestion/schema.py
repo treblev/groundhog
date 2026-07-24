@@ -167,6 +167,20 @@ def init_db(db_path: Path | str | None = None):
             delivery_error TEXT
         )
     """)
+    con.execute("ALTER TABLE outbox ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 0")
+    con.execute("ALTER TABLE outbox ADD COLUMN IF NOT EXISTS priority_reason VARCHAR")
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS derived_artifacts (
+            id VARCHAR PRIMARY KEY,
+            artifact_type VARCHAR NOT NULL,
+            period_start DATE NOT NULL,
+            period_end DATE NOT NULL,
+            content TEXT NOT NULL,
+            model VARCHAR NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
     con.close()
 

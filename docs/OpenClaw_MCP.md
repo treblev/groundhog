@@ -16,3 +16,12 @@ facts and state; OpenClaw chooses the user-facing wording and delivery channel.
 `mark_outbox_delivered` is idempotent. It does not send any message and does
 not change the original event. OpenClaw must only call it after successful
 delivery through its own configured channel.
+
+## Local LLM Boundary
+
+Groundhog may use the configured local Ollama model to create daily summaries
+and weekly reviews over stored facts. It may rank pending outbox items, but it
+must not write raw health, activity, stock, signal, alert, or memory records;
+change systemd configuration; or mark an item delivered. Generated summaries
+are stored in `derived_artifacts` and require OpenClaw or user review before
+any user-facing delivery.

@@ -33,6 +33,7 @@ MODULES = [
     "agent.runs",
     "agent.events",
     "agent.outbox",
+    "agent.summaries",
     "analytics.signals",
     "analytics.alerts",
     "groundhog_service",
