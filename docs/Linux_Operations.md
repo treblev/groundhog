@@ -112,6 +112,27 @@ systemctl --user start groundhog-stocks.service
 Linger is already enabled for `openclaw`, so the timer can run without an
 active login session.
 
+## Optional Daemon Mode
+
+The existing timer is the default deployment. Daemon mode is for a continuous
+Groundhog process that polls for due tasks and runs `daily-stocks` once per
+Phoenix business day after 5pm. Do not enable both modes: near 5pm they can
+race to start the same job.
+
+To switch from the timer to daemon mode as `openclaw`:
+
+```bash
+systemctl --user disable --now groundhog-stocks.timer
+cp deploy/systemd/user/groundhog-daemon.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now groundhog-daemon.service
+systemctl --user status groundhog-daemon.service
+journalctl --user -u groundhog-daemon.service -f
+```
+
+The daemon handles `SIGTERM` and `SIGINT` cleanly. Its `Restart=on-failure`
+policy lets systemd restart it after an unexpected process failure.
+
 ## Agent Direction
 
 Keep OpenClaw as the chat, scheduling, and delivery layer. Groundhog should stay

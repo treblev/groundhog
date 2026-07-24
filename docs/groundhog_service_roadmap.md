@@ -224,7 +224,7 @@ OpenClaw can answer: "What happened today?" using Groundhog tools.
 
 ## Phase 6: Always-On Mode
 
-Status: Planned
+Status: In review
 
 ### Goal
 
@@ -232,13 +232,13 @@ Groundhog can optionally run as a long-lived local process.
 
 ### Tasks
 
-- [ ] Decide whether daemon mode is needed beyond systemd timers.
-- [ ] Design `groundhog_service.py daemon`.
-- [ ] Add due-task polling.
-- [ ] Add clean shutdown handling.
-- [ ] Add systemd user service template for daemon mode.
-- [ ] Add journal-friendly logs.
-- [ ] Add tests for due-task selection.
+- [x] Decide whether daemon mode is needed beyond systemd timers.
+- [x] Design `groundhog_service.py daemon`.
+- [x] Add due-task polling.
+- [x] Add clean shutdown handling.
+- [x] Add systemd user service template for daemon mode.
+- [x] Add journal-friendly logs.
+- [x] Add tests for due-task selection.
 - [ ] Verify restart behavior.
 - [ ] Verify reboot behavior under linger.
 

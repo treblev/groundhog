@@ -1,0 +1,12 @@
+[Unit]
+Description=Groundhog local service daemon
+
+[Service]
+Type=simple
+WorkingDirectory=/home/openclaw/apps/groundhog
+Environment=TZ=America/Phoenix
+Environment=GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb
+Environment=GROUNDHOG_ALERT_BACKEND=none
+ExecStart=/home/openclaw/apps/groundhog/venv/bin/python /home/openclaw/apps/groundhog/groundhog_service.py daemon
+Restart=on-failure
+RestartSec=10

@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -119,6 +120,19 @@ class RunTrackingTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(result["latest_run"]["status"], "succeeded")
         self.assertEqual(result["pending_outbox_count"], 0)
+
+    def test_due_tasks_runs_weekday_once_after_market_close(self):
+        monday_after_close = datetime(2026, 7, 20, 17, 0, tzinfo=groundhog_service.PHOENIX)
+        monday_morning = datetime(2026, 7, 20, 9, 0, tzinfo=groundhog_service.PHOENIX)
+        sunday_after_close = datetime(2026, 7, 19, 17, 0, tzinfo=groundhog_service.PHOENIX)
+        ran_today = datetime(2026, 7, 20, 17, 1, tzinfo=groundhog_service.PHOENIX)
+        ran_yesterday = datetime(2026, 7, 19, 17, 1, tzinfo=groundhog_service.PHOENIX)
+
+        self.assertEqual(groundhog_service.due_tasks(monday_after_close, None), ["daily-stocks"])
+        self.assertEqual(groundhog_service.due_tasks(monday_after_close, ran_yesterday), ["daily-stocks"])
+        self.assertEqual(groundhog_service.due_tasks(monday_after_close, ran_today), [])
+        self.assertEqual(groundhog_service.due_tasks(monday_morning, None), [])
+        self.assertEqual(groundhog_service.due_tasks(sunday_after_close, None), [])
 
 
 if __name__ == "__main__":
