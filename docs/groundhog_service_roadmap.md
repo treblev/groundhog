@@ -70,7 +70,7 @@ User confirms the Linux migration is stable before Phase 1 begins.
 
 ## Phase 1: Service Run Tracking
 
-Status: In review
+Status: Complete
 
 ### Goal
 
@@ -107,7 +107,7 @@ User can answer: "Did Groundhog run today, and did it fail?"
 
 ## Phase 2: Events Table
 
-Status: In review
+Status: Complete
 
 ### Goal
 
@@ -146,7 +146,7 @@ created them.
 
 ## Phase 3: Outbox Table
 
-Status: In review
+Status: Complete
 
 ### Goal
 
@@ -171,7 +171,7 @@ User can see pending Groundhog messages before OpenClaw delivers them.
 
 ## Phase 4: Groundhog Service Runner
 
-Status: In review
+Status: Complete
 
 ### Goal
 
@@ -199,7 +199,7 @@ database and journal.
 
 ## Phase 5: MCP Service Tools
 
-Status: In review
+Status: Complete
 
 ### Goal
 
@@ -224,7 +224,7 @@ OpenClaw can answer: "What happened today?" using Groundhog tools.
 
 ## Phase 6: Always-On Mode
 
-Status: In review
+Status: Implemented; Linux lifecycle verification pending
 
 ### Goal
 
@@ -248,7 +248,7 @@ Groundhog can run continuously and recover cleanly after restart.
 
 ## Phase 7: Agentic Reasoning
 
-Status: In review
+Status: Complete
 
 ### Goal
 
