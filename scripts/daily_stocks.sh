@@ -7,4 +7,4 @@ cd "$(dirname "$0")/.."
 PYTHON=venv/bin/python
 
 echo "=== $(date) ==="
-$PYTHON scripts/daily_stocks.py
+$PYTHON groundhog_service.py run daily-stocks

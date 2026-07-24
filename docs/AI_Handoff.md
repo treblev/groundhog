@@ -44,7 +44,8 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 | `mcp_server/server.py` | MCP stdio tool server. Tools: run_sql, get_latest_price, get_recent_activities, get_health_summary, remember, recall. **Do not modify.** |
 | `mcp_client/client.py` | Old hand-rolled agent loop. Replaced. Keep for reference. |
 | `langgraph_client/client.py` | Active agent. Uses LangChain's `create_agent()` with MCP tools wrapped as async Python functions. |
-| `scripts/daily_stocks.sh` | Chains: stocks.py → signals.py → alerts.py |
+| `groundhog_service.py` | Service CLI: `run daily-stocks` and `status` |
+| `scripts/daily_stocks.sh` | systemd compatibility entrypoint to `groundhog_service.py run daily-stocks` |
 | `scripts/update_watchlist.py` | Scrapes Nasdaq-100 from Wikipedia, merges into watchlist.txt. |
 | `deploy/systemd/user/groundhog-stocks.service` | systemd user service for the daily stock pipeline. |
 | `deploy/systemd/user/groundhog-stocks.timer` | systemd user timer, runs 5pm America/Phoenix on weekdays. |

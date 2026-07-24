@@ -14,7 +14,7 @@ from agent import events
 from agent import outbox
 from analytics import alerts
 from ingestion import schema
-from scripts import daily_stocks
+import groundhog_service
 
 
 class EventTests(unittest.TestCase):
@@ -65,12 +65,12 @@ class EventTests(unittest.TestCase):
 
     def test_daily_pipeline_records_completed_event(self):
         with (
-            patch.object(daily_stocks, "DB_PATH", self.db_path),
-            patch.object(daily_stocks.stocks, "run"),
-            patch.object(daily_stocks.signals, "run"),
-            patch.object(daily_stocks.alerts, "run"),
+            patch.object(groundhog_service, "DB_PATH", self.db_path),
+            patch.object(groundhog_service.stocks, "run"),
+            patch.object(groundhog_service.signals, "run"),
+            patch.object(groundhog_service.alerts, "run"),
         ):
-            daily_stocks.run()
+            groundhog_service.run_daily_stocks()
 
         con = self._connection()
         try:
@@ -80,18 +80,18 @@ class EventTests(unittest.TestCase):
         finally:
             con.close()
 
-        self.assertEqual(row[:3], ("job_completed", "scripts.daily_stocks", "agent_run"))
+        self.assertEqual(row[:3], ("job_completed", "groundhog_service", "agent_run"))
         self.assertEqual(json.loads(row[3])["status"], "succeeded")
 
     def test_daily_pipeline_records_failed_event(self):
         with (
-            patch.object(daily_stocks, "DB_PATH", self.db_path),
-            patch.object(daily_stocks.stocks, "run", side_effect=RuntimeError("fetch failed")),
-            patch.object(daily_stocks.signals, "run"),
-            patch.object(daily_stocks.alerts, "run"),
+            patch.object(groundhog_service, "DB_PATH", self.db_path),
+            patch.object(groundhog_service.stocks, "run", side_effect=RuntimeError("fetch failed")),
+            patch.object(groundhog_service.signals, "run"),
+            patch.object(groundhog_service.alerts, "run"),
         ):
             with self.assertRaisesRegex(RuntimeError, "fetch failed"):
-                daily_stocks.run()
+                groundhog_service.run_daily_stocks()
 
         con = self._connection()
         try:

@@ -171,7 +171,7 @@ User can see pending Groundhog messages before OpenClaw delivers them.
 
 ## Phase 4: Groundhog Service Runner
 
-Status: Planned
+Status: In review
 
 ### Goal
 
@@ -179,17 +179,17 @@ Replace loose script chaining with one stable operational command surface.
 
 ### Tasks
 
-- [ ] Design CLI shape for `groundhog_service.py`.
-- [ ] Add `run daily-stocks` command.
-- [ ] Add `status` command.
-- [ ] Call existing ingestion/analytics modules without changing their core logic.
-- [ ] Record `agent_runs` around each service task.
-- [ ] Emit events and outbox rows where appropriate.
-- [ ] Update `scripts/daily_stocks.sh` to call the service runner.
-- [ ] Update systemd service documentation.
-- [ ] Add tests for runner success and failure paths.
-- [ ] Run offline regression tests.
-- [ ] Run live smoke tests.
+- [x] Design CLI shape for `groundhog_service.py`.
+- [x] Add `run daily-stocks` command.
+- [x] Add `status` command.
+- [x] Call existing ingestion/analytics modules without changing their core logic.
+- [x] Record `agent_runs` around each service task.
+- [x] Emit events and outbox rows where appropriate.
+- [x] Update `scripts/daily_stocks.sh` to call the service runner.
+- [x] Update systemd service documentation.
+- [x] Add tests for runner success and failure paths.
+- [x] Run offline regression tests.
+- [x] Run live smoke tests.
 - [ ] Manually run `groundhog-stocks.service`.
 
 ### Review Gate

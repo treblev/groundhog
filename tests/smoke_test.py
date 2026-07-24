@@ -35,7 +35,7 @@ MODULES = [
     "agent.outbox",
     "analytics.signals",
     "analytics.alerts",
-    "scripts.daily_stocks",
+    "groundhog_service",
     "mcp_server.server",
 ]
 

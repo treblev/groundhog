@@ -1,3 +1,6 @@
+import contextlib
+import io
+import json
 import sys
 import tempfile
 import unittest
@@ -10,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent import runs
 from ingestion import schema
-from scripts import daily_stocks
+import groundhog_service
 
 
 class RunTrackingTests(unittest.TestCase):
@@ -56,13 +59,13 @@ class RunTrackingTests(unittest.TestCase):
 
     def test_daily_pipeline_records_failure_and_reraises(self):
         with (
-            patch.object(daily_stocks, "DB_PATH", self.db_path),
-            patch.object(daily_stocks.stocks, "run"),
-            patch.object(daily_stocks.signals, "run", side_effect=RuntimeError("signal failure")),
-            patch.object(daily_stocks.alerts, "run"),
+            patch.object(groundhog_service, "DB_PATH", self.db_path),
+            patch.object(groundhog_service.stocks, "run"),
+            patch.object(groundhog_service.signals, "run", side_effect=RuntimeError("signal failure")),
+            patch.object(groundhog_service.alerts, "run"),
         ):
             with self.assertRaisesRegex(RuntimeError, "signal failure"):
-                daily_stocks.run()
+                groundhog_service.run_daily_stocks()
 
         con = self._connection()
         try:
@@ -78,12 +81,12 @@ class RunTrackingTests(unittest.TestCase):
 
     def test_daily_pipeline_records_success(self):
         with (
-            patch.object(daily_stocks, "DB_PATH", self.db_path),
-            patch.object(daily_stocks.stocks, "run"),
-            patch.object(daily_stocks.signals, "run"),
-            patch.object(daily_stocks.alerts, "run"),
+            patch.object(groundhog_service, "DB_PATH", self.db_path),
+            patch.object(groundhog_service.stocks, "run"),
+            patch.object(groundhog_service.signals, "run"),
+            patch.object(groundhog_service.alerts, "run"),
         ):
-            daily_stocks.run()
+            groundhog_service.run_daily_stocks()
 
         con = self._connection()
         try:
@@ -96,6 +99,26 @@ class RunTrackingTests(unittest.TestCase):
         self.assertEqual(row[:2], ("daily_stocks", "succeeded"))
         self.assertIsNotNone(row[2])
         self.assertIsNone(row[3])
+
+    def test_status_command_reports_latest_run_and_pending_outbox(self):
+        con = self._connection()
+        try:
+            run_id = runs.start_run(con, "daily_stocks")
+            runs.finish_run(con, run_id, "succeeded")
+        finally:
+            con.close()
+
+        output = io.StringIO()
+        with (
+            patch.object(groundhog_service, "DB_PATH", self.db_path),
+            contextlib.redirect_stdout(output),
+        ):
+            exit_code = groundhog_service.main(["status"])
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(result["latest_run"]["status"], "succeeded")
+        self.assertEqual(result["pending_outbox_count"], 0)
 
 
 if __name__ == "__main__":

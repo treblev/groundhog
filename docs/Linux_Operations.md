@@ -34,10 +34,10 @@ GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb \
   scripts/daily_stocks.sh
 ```
 
-`scripts/daily_stocks.sh` runs `scripts/daily_stocks.py`, which records one
-`agent_runs` row for the complete pipeline. A fatal pipeline error is stored
-with its traceback and then re-raised so systemd marks the service as failed.
-The wrapper runs:
+`scripts/daily_stocks.sh` calls `groundhog_service.py run daily-stocks`. The
+service runner records one `agent_runs` row for the complete pipeline. A fatal
+pipeline error is stored with its traceback and then re-raised so systemd marks
+the service as failed. The runner invokes:
 
 1. `python ingestion/stocks.py`
 2. `python analytics/signals.py`
@@ -47,6 +47,12 @@ The wrapper runs:
 `GROUNDHOG_ALERT_BACKEND=none` when OpenClaw is responsible for chat,
 scheduler, and delivery. For interactive desktop notifications, use
 `GROUNDHOG_ALERT_BACKEND=notify-send`.
+
+Print a machine-readable service snapshot:
+
+```bash
+venv/bin/python groundhog_service.py status
+```
 
 Inspect the most recent job runs:
 
