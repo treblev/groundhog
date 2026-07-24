@@ -7,8 +7,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import duckdb
 from config.settings import DB_PATH
 
-def init_db():
-    con = duckdb.connect(DB_PATH)
+def init_db(db_path: Path | str | None = None):
+    con = duckdb.connect(str(db_path or DB_PATH))
     
     con.execute("""
         CREATE TABLE IF NOT EXISTS health_metrics (
@@ -129,6 +129,17 @@ def init_db():
             fact TEXT,
             embedding FLOAT[],
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            id VARCHAR PRIMARY KEY,
+            job_name VARCHAR NOT NULL,
+            status VARCHAR NOT NULL,
+            started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            finished_at TIMESTAMP,
+            error_text TEXT
         )
     """)
 

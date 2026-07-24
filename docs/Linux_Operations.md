@@ -34,7 +34,10 @@ GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb \
   scripts/daily_stocks.sh
 ```
 
-`scripts/daily_stocks.sh` runs:
+`scripts/daily_stocks.sh` runs `scripts/daily_stocks.py`, which records one
+`agent_runs` row for the complete pipeline. A fatal pipeline error is stored
+with its traceback and then re-raised so systemd marks the service as failed.
+The wrapper runs:
 
 1. `python ingestion/stocks.py`
 2. `python analytics/signals.py`
@@ -44,6 +47,12 @@ GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb \
 `GROUNDHOG_ALERT_BACKEND=none` when OpenClaw is responsible for chat,
 scheduler, and delivery. For interactive desktop notifications, use
 `GROUNDHOG_ALERT_BACKEND=notify-send`.
+
+Inspect the most recent job runs:
+
+```bash
+venv/bin/python -c "import duckdb; from config.settings import DB_PATH; con = duckdb.connect(str(DB_PATH)); print(con.execute('SELECT job_name, status, started_at, finished_at, error_text FROM agent_runs ORDER BY started_at DESC LIMIT 10').fetchall())"
+```
 
 ## systemd User Timer
 

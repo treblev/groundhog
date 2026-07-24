@@ -70,7 +70,7 @@ User confirms the Linux migration is stable before Phase 1 begins.
 
 ## Phase 1: Service Run Tracking
 
-Status: Planned
+Status: In review
 
 ### Goal
 
@@ -79,18 +79,18 @@ succeeded, and what happened.
 
 ### Tasks
 
-- [ ] Design `agent_runs` schema.
-- [ ] Add `agent_runs` table to `ingestion/schema.py`.
-- [ ] Keep schema creation idempotent.
-- [ ] Add a small helper module for creating and finalizing run records.
-- [ ] Record successful job completion.
-- [ ] Record failed job completion with error text.
-- [ ] Add tests for successful run tracking.
-- [ ] Add tests for failed run tracking.
-- [ ] Wrap the daily stock pipeline with run tracking.
-- [ ] Update Linux operations docs.
-- [ ] Run offline regression tests.
-- [ ] Run live smoke tests.
+- [x] Design `agent_runs` schema.
+- [x] Add `agent_runs` table to `ingestion/schema.py`.
+- [x] Keep schema creation idempotent.
+- [x] Add a small helper module for creating and finalizing run records.
+- [x] Record successful job completion.
+- [x] Record failed job completion with error text.
+- [x] Add tests for successful run tracking.
+- [x] Add tests for failed run tracking.
+- [x] Wrap the daily stock pipeline with run tracking.
+- [x] Update Linux operations docs.
+- [x] Run offline regression tests.
+- [x] Run live smoke tests.
 
 ### Verification
 
