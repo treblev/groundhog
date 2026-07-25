@@ -70,15 +70,24 @@ def _query_ollama(image_path: Path) -> str:
 
 
 def _parse_workouts(raw: str) -> list[dict]:
-    """Extract a JSON array even when the model wraps it in a Markdown fence."""
-    match = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw, re.DOTALL | re.IGNORECASE)
-    candidate = match.group(1) if match else raw[raw.find("[") : raw.rfind("]") + 1]
+    """Extract the one-plan JSON array or object, with optional Markdown fencing."""
+    match = re.search(r"```(?:json)?\s*(\[.*?\]|\{.*?\})\s*```", raw, re.DOTALL | re.IGNORECASE)
+    if match:
+        candidate = match.group(1)
+    else:
+        array_start, object_start = raw.find("["), raw.find("{")
+        if array_start >= 0 and (object_start < 0 or array_start < object_start):
+            candidate = raw[array_start : raw.rfind("]") + 1]
+        else:
+            candidate = raw[object_start : raw.rfind("}") + 1]
     if not candidate:
         return []
     try:
         parsed = json.loads(candidate)
     except json.JSONDecodeError:
         return []
+    if isinstance(parsed, dict):
+        return [parsed]
     return [workout for workout in parsed if isinstance(workout, dict)] if isinstance(parsed, list) else []
 
 

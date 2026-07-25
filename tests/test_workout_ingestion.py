@@ -26,7 +26,7 @@ class WorkoutIngestionTests(unittest.TestCase):
             '```json\n[{"name": "AMRAP", "structure_type": "amrap"}]\n```'
         )
         self.assertEqual(parsed, [{"name": "AMRAP", "structure_type": "amrap"}])
-        self.assertEqual(workouts._parse_workouts('{"name": "not an array"}'), [])
+        self.assertEqual(workouts._parse_workouts('{"name": "single plan"}'), [{"name": "single plan"}])
 
     def test_multiple_cards_are_combined_into_one_workout_plan(self):
         merged = workouts._combine_workout_cards(
