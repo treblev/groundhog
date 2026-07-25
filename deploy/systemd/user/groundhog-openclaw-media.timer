@@ -1,0 +1,11 @@
+[Unit]
+Description=Check OpenClaw media for new activity screenshots
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=groundhog-openclaw-media.service
+
+[Install]
+WantedBy=timers.target

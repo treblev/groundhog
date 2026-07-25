@@ -143,6 +143,33 @@ Verified delivery path:
   through the cron job and marked `delivered`.
 - Pending outbox count returned to `0`.
 
+## OpenClaw Activity Screenshot Intake
+
+`groundhog-openclaw-media.timer` checks OpenClaw's inbound media directory every
+minute. On first run, it records all existing attachments without importing
+them. Later images are parsed by the local vision model and upserted into the
+existing `activities` table. The checkpoint is stored outside the repository at
+`/home/openclaw/data/groundhog/openclaw_activity_media_state.json`.
+
+Install it as `openclaw`:
+
+```bash
+cp deploy/systemd/user/groundhog-openclaw-media.service ~/.config/systemd/user/
+cp deploy/systemd/user/groundhog-openclaw-media.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now groundhog-openclaw-media.timer
+```
+
+The first service run must initialize the checkpoint without importing older
+Telegram images:
+
+```bash
+GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb \
+GROUNDHOG_OPENCLAW_MEDIA_INBOUND_DIR=/home/openclaw/media/inbound \
+GROUNDHOG_OPENCLAW_MEDIA_STATE_PATH=/home/openclaw/data/groundhog/openclaw_activity_media_state.json \
+venv/bin/python -m scripts.import_openclaw_activity_media --initialize
+```
+
 ## systemd User Timer
 
 Install the user service and timer as `openclaw`:
