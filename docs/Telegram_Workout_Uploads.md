@@ -1,28 +1,28 @@
 # Telegram Workout Uploads
 
-OpenClaw's Telegram channel receives inbound images locally. For a SugarWOD
-screenshot, it should call Groundhog directly with the received media path:
+OpenClaw's Telegram channel receives inbound images locally. Workout-result
+screenshots are activity data and belong in Groundhog's existing `activities`
+table. They are not SugarWOD workout-plan screenshots.
 
 ```bash
 cd /home/openclaw/apps/groundhog
 GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb \
-  venv/bin/python -m ingestion.workouts \
-  --image "$MEDIA_PATH" --date YYYY-MM-DD
+  venv/bin/python -m ingestion.health \
+  --image "$MEDIA_PATH"
 ```
 
 `$MEDIA_PATH` is the local file path provided by OpenClaw for the Telegram
-attachment. The date comes from the user's `YYYY-MM-DD` caption, not from the
-vision model or screenshot pixels. Groundhog copies the source image into its
-private processed archive, calls the local `qwen3-vl` model, upserts the parsed
-workouts, and records one idempotent `workout_data_imported` event.
+attachment. Groundhog reads the activity date shown in the screenshot (or
+accepts `--date YYYY-MM-DD` if the user supplies a correction), archives a
+private copy, calls the local `qwen3-vl` model, and upserts the extracted data
+into `activities`.
 
 Suggested OpenClaw behavior for direct Telegram messages:
 
-1. On a PNG, JPG, or JPEG attachment with a `YYYY-MM-DD` caption, invoke the
-   command above with that date.
-2. Reply with the number of imported workout cards and their names.
-3. If the date is absent or invalid, ask for it; do not guess from the image or
-   the Telegram message timestamp.
+1. On a PNG, JPG, or JPEG workout-result attachment, invoke the command above.
+2. Reply with the imported activity type and visible metrics.
+3. If the screenshot date is unclear, ask for `YYYY-MM-DD` and rerun with
+   `--date YYYY-MM-DD`; do not use the Telegram message timestamp.
 4. If extraction fails, leave the attachment untouched and report the error.
 
 The command does not move or delete OpenClaw's media-cache file.

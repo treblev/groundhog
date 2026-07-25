@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import base64
+import argparse
 import hashlib
 import json
 import re
@@ -160,6 +161,54 @@ def _insert_activity(con: duckdb.DuckDBPyConnection, metrics: dict) -> None:
     )
 
 
+def _archive_image(image_path: Path) -> Path:
+    """Copy a chat attachment into Groundhog's local archive without moving it."""
+    digest = hashlib.sha256(image_path.read_bytes()).hexdigest()
+    destination = PROCESSED_DIR / f"{digest}{image_path.suffix.lower()}"
+    if not destination.exists():
+        shutil.copy2(image_path, destination)
+    return destination
+
+
+def process_image(image_path: Path, activity_date: date | None = None) -> list[dict]:
+    """Ingest one activity-result screenshot supplied by an upload integration."""
+    if image_path.suffix.lower() not in IMAGE_EXTS:
+        raise ValueError(f"Unsupported image type: {image_path.suffix or '(none)'}")
+    if not image_path.is_file():
+        raise FileNotFoundError(image_path)
+
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    raw = _query_ollama(image_path)
+    records = _parse_metrics(raw)
+    if not records:
+        raise ValueError(f"Could not parse response: {raw[:200]}")
+
+    con = duckdb.connect(str(DB_PATH))
+    imported = []
+    try:
+        for metrics in records:
+            metrics["date"] = (
+                activity_date.isoformat()
+                if activity_date is not None
+                else _resolve_date(metrics.get("month_day"), date.today())
+            )
+            if not metrics["date"]:
+                raise ValueError(f"Could not resolve date from month_day={metrics.get('month_day')!r}.")
+            record_type = metrics.get("type")
+            if record_type == "daily_summary":
+                _insert_daily_summary(con, metrics)
+            elif record_type == "activity":
+                _insert_activity(con, metrics)
+            else:
+                raise ValueError(f"Unknown record type: {record_type!r}")
+            imported.append(metrics)
+    finally:
+        con.close()
+
+    _archive_image(image_path)
+    return imported
+
+
 def run() -> None:
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     images = [p for p in DROP_FOLDER.iterdir() if p.suffix.lower() in IMAGE_EXTS]
@@ -168,36 +217,28 @@ def run() -> None:
         print("No images found in drop folder.")
         return
 
-    con = duckdb.connect(str(DB_PATH))
-    try:
-        for image_path in images:
-            print(f"Processing {image_path.name}...")
-            try:
-                raw = _query_ollama(image_path)
-                records = _parse_metrics(raw)
-                if not records:
-                    print(f"  Could not parse response: {raw[:200]}")
-                    continue
-                for metrics in records:
-                    metrics["date"] = _resolve_date(metrics.get("month_day"), date.today())
-                    if not metrics["date"]:
-                        print(f"  Could not resolve date from month_day={metrics.get('month_day')!r}, skipping.")
-                        continue
-                    record_type = metrics.get("type")
-                    if record_type == "daily_summary":
-                        _insert_daily_summary(con, metrics)
-                    elif record_type == "activity":
-                        _insert_activity(con, metrics)
-                    else:
-                        print(f"  Unknown type '{record_type}', skipping.")
-                        continue
-                    print(f"  Inserted: {metrics}")
-                shutil.move(str(image_path), PROCESSED_DIR / image_path.name)
-            except Exception as e:
-                print(f"  Error: {e}")
-    finally:
-        con.close()
+    for image_path in images:
+        print(f"Processing {image_path.name}...")
+        try:
+            records = process_image(image_path)
+            shutil.move(str(image_path), PROCESSED_DIR / image_path.name)
+            for metrics in records:
+                print(f"  Inserted: {metrics}")
+        except Exception as error:
+            print(f"  Error: {error}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Extract activity results from fitness screenshots.")
+    parser.add_argument("--image", type=Path, help="A screenshot supplied by an upload integration.")
+    parser.add_argument("--date", type=date.fromisoformat, help="Optional activity date in YYYY-MM-DD format.")
+    args = parser.parse_args()
+    if args.image is None:
+        run()
+        return
+    records = process_image(args.image, args.date)
+    print(json.dumps(records, sort_keys=True))
 
 
 if __name__ == "__main__":
-    run()
+    main()
