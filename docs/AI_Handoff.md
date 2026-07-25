@@ -6,7 +6,7 @@
 
 **Groundhog** is a personal data pipeline and local AI agent. It ingests health, sleep, workout, and stock market data into a single local DuckDB database, runs technical analysis signals, fires macOS alerts on trading signals, and answers natural-language questions about the data via an LLM agent.
 
-**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Core data pipelines have been migrated from Mac to Linux under the `openclaw` service user. The `groundhog-stocks.timer` deployment has completed a successful run through `groundhog-stocks.service`. OpenClaw handles chat, scheduling, and delivery; Groundhog remains the local data and analytics layer. `langgraph_client/client.py` has replaced the hand-rolled `mcp_client/client.py` as the active agent — it uses LangChain's `create_agent()` directly rather than a custom `StateGraph`. `mcp_client/client.py` is kept for reference only.
+**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Core data pipelines have been migrated from Mac to Linux under the `openclaw` service user. The `groundhog-stocks.timer` deployment has completed a successful run through `groundhog-stocks.service`. A deployed `groundhog-openclaw-media.timer` now imports new Telegram screenshots deterministically, without relying on the OpenClaw chat model. Activity-result screenshots go to the existing `activities` table; the one-shot plan mode sends exactly the next image to `workouts` and then resets to activity mode. OpenClaw handles chat, scheduling, and delivery; Groundhog remains the local data and analytics layer. `langgraph_client/client.py` has replaced the hand-rolled `mcp_client/client.py` as the active agent — it uses LangChain's `create_agent()` directly rather than a custom `StateGraph`. `mcp_client/client.py` is kept for reference only.
 
 ---
 
@@ -21,7 +21,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
                           mcp_client/      (legacy hand-rolled loop, kept for reference)
 ```
 
-- **Ingestion**: yfinance (stocks), Garmin screenshots via vision LLM (health/sleep), SugarWOD screenshots via vision LLM (workouts)
+- **Ingestion**: yfinance (stocks), fitness activity screenshots via vision LLM → `activities`, SugarWOD plan screenshots via vision LLM → `workouts`, and Sleep8 screenshots → `sleep_metrics`
 - **Analytics**: SMA50/200 crossover, Supertrend (daily + weekly) → `stock_signals` → `stock_alerts`
 - **Agent**: MCP tool server (stdio JSON-RPC) + LangGraph client (`create_agent()`), replacing the hand-rolled loop
 - **Scheduling**: Linux systemd user timer under `openclaw`
@@ -39,6 +39,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 | `ingestion/stocks.py` | yfinance OHLCV fetch → DuckDB upsert. NaN→None via `_safe()`. |
 | `ingestion/sleep.py` | Drops sleep screenshots → vision LLM → sleep_metrics upsert. Date from filename. |
 | `ingestion/workouts.py` | Drops SugarWOD screenshots → vision LLM → workouts upsert. Hash-based dedup ID. |
+| `ingestion/health.py` | Activity-result screenshot importer. Supports a direct `--image` path for OpenClaw attachments and writes to `activities`. |
 | `analytics/signals.py` | SMA50/200 + Supertrend (daily+weekly). Uses `ta` lib for SMA, manual pandas for Supertrend. |
 | `analytics/alerts.py` | Reads signal direction flips → optional notification → stock_alerts dedup. |
 | `mcp_server/server.py` | MCP stdio tool server. Core data tools plus documented service-state tools in `docs/OpenClaw_MCP.md`. |
@@ -47,10 +48,12 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 | `groundhog_service.py` | Service CLI: `run daily-stocks` and `status` |
 | `scripts/daily_stocks.sh` | systemd compatibility entrypoint to `groundhog_service.py run daily-stocks` |
 | `scripts/openclaw_deliver_outbox.py` | OpenClaw-side delivery bridge: Groundhog MCP outbox → OpenClaw Telegram → mark delivered on success. |
+| `scripts/import_openclaw_activity_media.py` | Deterministic OpenClaw media watcher. Checkpoints old files, imports each new attachment once, and has one-shot `--next-kind plan` routing. |
 | `scripts/update_watchlist.py` | Scrapes Nasdaq-100 from Wikipedia, merges into watchlist.txt. |
 | `deploy/systemd/user/groundhog-stocks.service` | systemd user service for the daily stock pipeline. |
 | `deploy/systemd/user/groundhog-stocks.timer` | systemd user timer, runs 5pm America/Phoenix on weekdays. |
 | `deploy/systemd/user/groundhog-daemon.service` | Optional always-on daemon service; do not enable alongside the timer. |
+| `deploy/systemd/user/groundhog-openclaw-media.{service,timer}` | One-minute OpenClaw inbound-media watcher for Telegram screenshots. |
 | `docs/Linux_Operations.md` | Linux host runbook for stock jobs and the systemd user timer. |
 
 ---
@@ -69,7 +72,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 
 **Known open items:**
 - Sleep data has only a few test rows; no automated ingestion trigger yet (manual drop-and-run)
-- Workouts ingestion is manual (drop screenshots, run script); no Linux timer yet
+- The media watcher treats incoming images as activity results by default. Before a SugarWOD plan upload, arm exactly one plan with `python -m scripts.import_openclaw_activity_media --next-kind plan` on Linux; it resets after that one file.
 - `notebooks/agent_prompt_evals.ipynb` has uncommitted changes (visible in git status)
 
 ---
@@ -83,6 +86,9 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 - **`ta` library for SMA, manual pandas for Supertrend**: `pandas-ta` fails on Python 3.14 (numba won't build)
 - **Weekly Supertrend**: resample daily OHLCV to weekly with `resample("W-FRI")` — do not fetch weekly bars from yfinance
 - **Hash-based workout IDs**: `SHA256(date|name|description[:50])[:16]` for safe re-runs
+- **Telegram screenshots are deterministic**: do not rely on the OpenClaw chat model to interpret an image. `groundhog-openclaw-media.timer` scans `/home/openclaw/media/inbound` once per minute and calls the local `qwen3-vl:latest` importer.
+- **One SugarWOD screenshot is one plan**: multiple visible cards/sections are combined into one `workouts` record, with all card text in `description`.
+- **MCP DuckDB lifecycle**: `mcp_server/server.py` must open and close its DuckDB connection per tool call. A persistent write connection blocks ingestion in another process.
 - **Watchlist default period**: `"2y"` (changed from `"1d"` — 1d wasn't enough for SMA200)
 - **Tickers that leave Nasdaq-100 stay in watchlist**: intentional, you may still want to track them
 - **Blog posts**: always commit AND push in one step; never commit without pushing
@@ -238,6 +244,10 @@ In order (most recent last):
 - Fixed NaN handling for ADI/LIN
 - Added sleep ingestion (`ingestion/sleep.py`, `sleep_metrics` table)
 - Added workout ingestion (`ingestion/workouts.py`, `workouts` table)
+- Added deterministic Telegram screenshot intake on Linux. The initial watcher checkpoint ignored existing Telegram images; it processes later files only and records its state at `/home/openclaw/data/groundhog/openclaw_activity_media_state.json`.
+- Added direct activity screenshot ingestion into the existing `activities` table and verified three Telegram uploads end-to-end.
+- Added one-shot SugarWOD plan routing, and corrected the importer so one multi-card screenshot creates one combined plan record.
+- Fixed MCP DuckDB locking by removing the persistent connection and import-time schema write.
 - Enriched MCP agent schema context (stock_signals, stock_alerts, workouts hints)
 - Rewrote `langgraph_client/client.py` to use `create_agent()` instead of a hand-built `StateGraph`
 - Fixed broken tool wrappers in `langgraph_client`
