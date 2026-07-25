@@ -2,7 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from langchain.agents.middleware import TodoListMiddleware, ToolRetryMiddleware
+from langchain.agents.middleware import TodoListMiddleware, ToolCallLimitMiddleware, ToolRetryMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -15,6 +15,10 @@ class LangGraphClientTests(unittest.TestCase):
         middleware = _make_middleware()
 
         self.assertTrue(any(isinstance(item, ToolRetryMiddleware) for item in middleware))
+        limits = [item for item in middleware if isinstance(item, ToolCallLimitMiddleware)]
+        self.assertEqual(len(limits), 1)
+        self.assertEqual(limits[0].run_limit, 12)
+        self.assertEqual(limits[0].exit_behavior, "continue")
         self.assertTrue(any(isinstance(item, TodoListMiddleware) for item in middleware))
         self.assertTrue(any(isinstance(item, DatabaseGroundingMiddleware) for item in middleware))
 

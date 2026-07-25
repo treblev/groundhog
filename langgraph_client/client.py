@@ -6,7 +6,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import asyncio
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware, TodoListMiddleware, ToolRetryMiddleware
+from langchain.agents.middleware import (
+    AgentMiddleware,
+    TodoListMiddleware,
+    ToolCallLimitMiddleware,
+    ToolRetryMiddleware,
+)
 from langchain_ollama import ChatOllama
 from langchain_core.messages import AIMessage, ToolMessage
 from mcp import ClientSession
@@ -57,6 +62,7 @@ def _make_middleware() -> list[AgentMiddleware]:
     """Return the local-only safety and planning middleware for the agent."""
     return [
         ToolRetryMiddleware(max_retries=2, initial_delay=0, jitter=False),
+        ToolCallLimitMiddleware(run_limit=12, exit_behavior="continue"),
         TodoListMiddleware(),
         DatabaseGroundingMiddleware(),
     ]
