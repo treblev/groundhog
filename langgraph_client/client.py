@@ -6,7 +6,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import asyncio
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware, TodoListMiddleware, ToolRetryMiddleware
 from langchain_ollama import ChatOllama
+from langchain_core.messages import AIMessage, ToolMessage
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
 
@@ -21,6 +23,43 @@ _DUCKDB_DIALECT = """\
 -- Truncation: DATE_TRUNC('week', date), DATE_TRUNC('month', date)
 -- Subqueries: no LIMIT inside subqueries — use a CTE instead
 """
+
+
+class DatabaseGroundingMiddleware(AgentMiddleware):
+    """Prevent unverified personal-data answers when no database tool was used."""
+
+    _DECLINE_MESSAGE = (
+        "I can't verify that from the available database results. "
+        "Please try again when the relevant data is available."
+    )
+
+    def after_model(self, state, runtime):
+        messages = state["messages"]
+        if not messages or not isinstance(messages[-1], AIMessage):
+            return None
+
+        answer = messages[-1]
+        if answer.tool_calls:
+            return None
+        if any(isinstance(message, ToolMessage) for message in messages):
+            return None
+
+        # The agent is intentionally database-first.  If it reaches a final answer
+        # without a tool result, return a clear non-claim rather than letting model
+        # context or memory masquerade as current personal data.
+        return {"messages": [AIMessage(content=self._DECLINE_MESSAGE)]}
+
+    async def aafter_model(self, state, runtime):
+        return self.after_model(state, runtime)
+
+
+def _make_middleware() -> list[AgentMiddleware]:
+    """Return the local-only safety and planning middleware for the agent."""
+    return [
+        ToolRetryMiddleware(max_retries=2, initial_delay=0, jitter=False),
+        TodoListMiddleware(),
+        DatabaseGroundingMiddleware(),
+    ]
 
 
 def _make_tools(session: ClientSession) -> list:
@@ -98,10 +137,14 @@ async def run():
             agent = create_agent(
                 model=ChatOllama(model=OLLAMA_SQL_MODEL, base_url=OLLAMA_BASE_URL),
                 tools=tools,
+                middleware=_make_middleware(),
                 system_prompt=(
                     "You are a personal data assistant with access to tools that query a local database.\n"
-                    "Use tools to answer the user's question. Do not guess — always call a tool to get real data.\n"
+                    "Use tools to answer factual questions about the user's personal data. Do not guess — "
+                    "ground each factual claim in results from tools called during this question.\n"
                     "Call only the tools needed. Once you have enough information, stop and give your final answer.\n"
+                    "After every tool result, re-check the current question and your todo plan before proceeding. "
+                    "Revise the plan when a result contradicts an assumption, adds a needed step, or makes a step unnecessary.\n"
                     "When a tool returns data, interpret it directly. Do not call additional tools to verify.\n"
                     "If a table returns only null/empty data, immediately call run_sql on related tables "
                     "(e.g. sleep_metrics, workouts) yourself before answering. Do not ask the user for "
