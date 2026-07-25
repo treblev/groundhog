@@ -4,6 +4,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import asyncio
+import json
+import re
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
@@ -13,7 +15,9 @@ from langchain.agents.middleware import (
     ToolRetryMiddleware,
 )
 from langchain_ollama import ChatOllama
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain.agents.middleware.types import hook_config
+from langgraph.types import Command
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
 
@@ -31,14 +35,72 @@ _DUCKDB_DIALECT = """\
 
 
 class DatabaseGroundingMiddleware(AgentMiddleware):
-    """Prevent unverified personal-data answers when no database tool was used."""
+    """Verify factual answers against this run's tool output and repair once."""
 
     _DECLINE_MESSAGE = (
         "I can't verify that from the available database results. "
         "Please try again when the relevant data is available."
     )
 
-    def after_model(self, state, runtime):
+    _CORRECTION_MARKER = "[Grounding verifier correction]"
+
+    def __init__(self, verifier_model=None):
+        super().__init__()
+        self.verifier_model = verifier_model or ChatOllama(
+            model=OLLAMA_SQL_MODEL,
+            base_url=OLLAMA_BASE_URL,
+            temperature=0,
+        )
+
+    @staticmethod
+    def _tool_evidence(messages) -> str:
+        return "\n\n".join(
+            str(message.content) for message in messages if isinstance(message, ToolMessage)
+        )
+
+    @classmethod
+    def _correction_count(cls, messages) -> int:
+        return sum(
+            isinstance(message, HumanMessage) and str(message.content).startswith(cls._CORRECTION_MARKER)
+            for message in messages
+        )
+
+    async def _verify(self, messages, answer: AIMessage) -> tuple[bool, str]:
+        evidence = self._tool_evidence(messages)
+        if not evidence:
+            return False, "No database tool result was retrieved during this question."
+
+        question = next(
+            (
+                str(message.content)
+                for message in messages
+                if isinstance(message, HumanMessage)
+                and not str(message.content).startswith(self._CORRECTION_MARKER)
+            ),
+            "",
+        )
+        prompt = (
+            "Decide whether every factual claim in the proposed answer is supported by the tool results. "
+            "Do not use outside knowledge or fill in missing facts. Return JSON only: "
+            '{"grounded": true|false, "reason": "brief explanation"}.\n\n'
+            f"User question:\n{question}\n\n"
+            f"Tool results from this run:\n{evidence}\n\n"
+            f"Proposed answer:\n{answer.content}"
+        )
+        try:
+            response = await self.verifier_model.ainvoke(
+                [SystemMessage(content="You are a strict evidence verifier."), HumanMessage(content=prompt)]
+            )
+            match = re.search(r"\{.*\}", str(response.content), re.DOTALL)
+            verdict = json.loads(match.group()) if match else {}
+            if isinstance(verdict.get("grounded"), bool):
+                return verdict["grounded"], str(verdict.get("reason", "No reason supplied."))
+            return False, "The verifier did not return a valid grounded verdict."
+        except Exception as error:
+            return False, f"The verifier could not validate the answer: {error}"
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state, runtime):
         messages = state["messages"]
         if not messages or not isinstance(messages[-1], AIMessage):
             return None
@@ -46,16 +108,20 @@ class DatabaseGroundingMiddleware(AgentMiddleware):
         answer = messages[-1]
         if answer.tool_calls:
             return None
-        if any(isinstance(message, ToolMessage) for message in messages):
+        grounded, reason = await self._verify(messages, answer)
+        if grounded:
             return None
 
-        # The agent is intentionally database-first.  If it reaches a final answer
-        # without a tool result, return a clear non-claim rather than letting model
-        # context or memory masquerade as current personal data.
-        return {"messages": [AIMessage(content=self._DECLINE_MESSAGE)]}
+        if self._correction_count(messages) >= 1:
+            return {"messages": [AIMessage(content=self._DECLINE_MESSAGE)]}
 
-    async def aafter_model(self, state, runtime):
-        return self.after_model(state, runtime)
+        correction = HumanMessage(
+            content=(
+                f"{self._CORRECTION_MARKER} Your proposed answer was not sufficiently grounded: {reason} "
+                "Use the current tool results only, or call the necessary database tool, then provide a corrected answer."
+            )
+        )
+        return Command(goto="model", update={"messages": [correction]})
 
 
 def _make_middleware() -> list[AgentMiddleware]:

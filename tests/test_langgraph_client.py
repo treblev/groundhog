@@ -4,13 +4,14 @@ from pathlib import Path
 
 from langchain.agents.middleware import TodoListMiddleware, ToolCallLimitMiddleware, ToolRetryMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.types import Command
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from langgraph_client.client import DatabaseGroundingMiddleware, _make_middleware
 
 
-class LangGraphClientTests(unittest.TestCase):
+class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
     def test_middleware_includes_retry_and_mutable_todos(self):
         middleware = _make_middleware()
 
@@ -22,18 +23,39 @@ class LangGraphClientTests(unittest.TestCase):
         self.assertTrue(any(isinstance(item, TodoListMiddleware) for item in middleware))
         self.assertTrue(any(isinstance(item, DatabaseGroundingMiddleware) for item in middleware))
 
-    def test_grounding_guard_declines_final_answer_without_tool_result(self):
+    async def test_grounding_guard_requests_a_corrective_retry_without_tool_result(self):
         guard = DatabaseGroundingMiddleware()
-        update = guard.after_model(
+        update = await guard.aafter_model(
             {"messages": [HumanMessage(content="What was my latest resting heart rate?"), AIMessage(content="54 bpm")]},
+            runtime=None,
+        )
+
+        self.assertIsInstance(update, Command)
+        self.assertEqual(update.goto, "model")
+        self.assertIn(guard._CORRECTION_MARKER, update.update["messages"][0].content)
+
+    async def test_grounding_guard_declines_after_one_failed_retry(self):
+        guard = DatabaseGroundingMiddleware()
+        update = await guard.aafter_model(
+            {
+                "messages": [
+                    HumanMessage(content="What was my latest resting heart rate?"),
+                    HumanMessage(content=f"{guard._CORRECTION_MARKER} retrieve evidence"),
+                    AIMessage(content="54 bpm"),
+                ]
+            },
             runtime=None,
         )
 
         self.assertEqual(update["messages"][0].content, guard._DECLINE_MESSAGE)
 
-    def test_grounding_guard_allows_answer_backed_by_tool_result(self):
-        guard = DatabaseGroundingMiddleware()
-        update = guard.after_model(
+    async def test_grounding_guard_allows_verifier_approved_answer(self):
+        class ApprovedVerifier:
+            async def ainvoke(self, messages):
+                return AIMessage(content='{"grounded": true, "reason": "The result states 54."}')
+
+        guard = DatabaseGroundingMiddleware(verifier_model=ApprovedVerifier())
+        update = await guard.aafter_model(
             {
                 "messages": [
                     HumanMessage(content="What was my latest resting heart rate?"),
