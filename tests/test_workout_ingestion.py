@@ -28,6 +28,18 @@ class WorkoutIngestionTests(unittest.TestCase):
         self.assertEqual(parsed, [{"name": "AMRAP", "structure_type": "amrap"}])
         self.assertEqual(workouts._parse_workouts('{"name": "not an array"}'), [])
 
+    def test_multiple_cards_are_combined_into_one_workout_plan(self):
+        merged = workouts._combine_workout_cards(
+            [
+                {"name": "Conditioning", "category": "Fitness", "structure_type": "amrap", "description": "10 min AMRAP"},
+                {"name": "Deadlift", "category": "Fitness", "structure_type": "strength", "description": "5 x 3"},
+            ]
+        )
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["name"], "Conditioning")
+        self.assertIsNone(merged[0]["structure_type"])
+        self.assertEqual(merged[0]["description"], "Conditioning\n10 min AMRAP\n\nDeadlift\n5 x 3")
+
     def test_filename_date_overrides_vision_dates_and_sets_weekday(self):
         parsed = [{"date": "2025-01-01", "date_day": 1, "day_of_week": "WED"}]
         workouts._apply_filename_date(parsed, date(2026, 7, 21))

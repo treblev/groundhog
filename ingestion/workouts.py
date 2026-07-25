@@ -22,19 +22,21 @@ OLLAMA_URL = OLLAMA_CHAT_URL
 PROCESSED_DIR = WORKOUTS_DROP_FOLDER / "processed"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
-PROMPT = """You are extracting workout data from a SugarWOD screenshot.
+PROMPT = """You are extracting one complete daily workout plan from a SugarWOD screenshot.
 
-Always return a JSON array. Each element represents one workout card.
+Always return a JSON array containing exactly one object. A screenshot may show
+multiple cards or sections (for example, a HYROX section followed by strength
+work), but they are components of one workout plan—not separate workouts.
 
-For each workout card, return:
+Return:
 {
-  "day_of_week": <"MON"|"TUE"|"WED"|"THU"|"FRI"|"SAT"|"SUN" — from the column header, or null if single-day view>,
-  "date_day": <integer day-of-month from the column header, or null if not shown>,
-  "date": <"YYYY-MM-DD" if the full date is visible, otherwise null>,
-  "name": <the workout card header text, e.g. "MURPH", "Deadlift 8-8-6-6-4-4-4", "HYROX (9 am and 4 pm)">,
-  "category": <"Fitness"|"Performance"|"HYROX"|or other visible label, or null>,
-  "structure_type": <"amrap"|"emom"|"rotating"|"for_time"|"strength"|"intervals"|null>,
-  "description": <full workout text as a single string, preserving newlines as \\n>
+  "day_of_week": <"MON"|"TUE"|"WED"|"THU"|"FRI"|"SAT"|"SUN" — from the column header, or null if unavailable>,
+  "date_day": <integer day-of-month from the column header, or null>,
+  "date": <"YYYY-MM-DD" if fully visible, otherwise null>,
+  "name": <the main workout title, or the first card header if no overall title exists>,
+  "category": <the primary visible label, or null>,
+  "structure_type": <the primary format, or null if the plan has multiple formats>,
+  "description": <all sections and cards in reading order, including each card heading and its full text, preserving newlines as \\n>
 }
 
 structure_type rules:
@@ -46,9 +48,8 @@ structure_type rules:
 - "intervals" → timed work/rest blocks like "30 second work / 2 minute rest"
 - null        → if unclear
 
-This importer receives one daily screenshot per file. Extract each visible section
-(Fitness, Performance, etc.) as a separate element. Do not infer dates from the
-screen; the importer assigns the date from the screenshot filename.
+Do not infer dates from the screen; the importer assigns the date from the
+screenshot filename.
 
 Return null for any field not visible. No explanation, just the JSON array."""
 
@@ -79,6 +80,26 @@ def _parse_workouts(raw: str) -> list[dict]:
     except json.JSONDecodeError:
         return []
     return [workout for workout in parsed if isinstance(workout, dict)] if isinstance(parsed, list) else []
+
+
+def _combine_workout_cards(workouts: list[dict]) -> list[dict]:
+    """Defensively merge multi-card model output into the one plan per screenshot."""
+    if len(workouts) <= 1:
+        return workouts
+
+    primary = workouts[0].copy()
+    sections = []
+    for workout in workouts:
+        heading = workout.get("name") or "Workout section"
+        description = workout.get("description") or ""
+        sections.append(f"{heading}\n{description}".strip())
+    primary["description"] = "\n\n".join(sections)
+    primary["structure_type"] = (
+        primary.get("structure_type")
+        if len({workout.get("structure_type") for workout in workouts}) == 1
+        else None
+    )
+    return [primary]
 
 
 def _date_from_filename(path: Path) -> Optional[date]:
@@ -159,6 +180,7 @@ def process_image(image_path: Path, screenshot_date: date | None = None) -> int:
     workouts = _parse_workouts(raw)
     if not workouts:
         raise ValueError(f"Could not parse workout data: {raw[:200]}")
+    workouts = _combine_workout_cards(workouts)
     _apply_filename_date(workouts, screenshot_date)
 
     con = duckdb.connect(str(DB_PATH))
