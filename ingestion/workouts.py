@@ -3,8 +3,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import argparse
 import base64
-import calendar
 import hashlib
 import json
 import re
@@ -16,6 +16,7 @@ import duckdb
 import httpx
 
 from config.settings import DB_PATH, OLLAMA_CHAT_URL, WORKOUTS_DROP_FOLDER, OLLAMA_VISION_MODEL
+from agent.events import record_event
 
 OLLAMA_URL = OLLAMA_CHAT_URL
 PROCESSED_DIR = WORKOUTS_DROP_FOLDER / "processed"
@@ -45,8 +46,9 @@ structure_type rules:
 - "intervals" → timed work/rest blocks like "30 second work / 2 minute rest"
 - null        → if unclear
 
-If the screenshot shows a weekly calendar (MON–SUN columns), extract every visible workout card across all days.
-If the screenshot shows a single day, extract each section (Fitness, Performance, etc.) as a separate element.
+This importer receives one daily screenshot per file. Extract each visible section
+(Fitness, Performance, etc.) as a separate element. Do not infer dates from the
+screen; the importer assigns the date from the screenshot filename.
 
 Return null for any field not visible. No explanation, just the JSON array."""
 
@@ -67,37 +69,35 @@ def _query_ollama(image_path: Path) -> str:
 
 
 def _parse_workouts(raw: str) -> list[dict]:
-    match = re.search(r"\[.*\]", raw, re.DOTALL)
-    if not match:
+    """Extract a JSON array even when the model wraps it in a Markdown fence."""
+    match = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw, re.DOTALL | re.IGNORECASE)
+    candidate = match.group(1) if match else raw[raw.find("[") : raw.rfind("]") + 1]
+    if not candidate:
         return []
     try:
-        return json.loads(match.group())
+        parsed = json.loads(candidate)
     except json.JSONDecodeError:
         return []
+    return [workout for workout in parsed if isinstance(workout, dict)] if isinstance(parsed, list) else []
 
 
-def _resolve_date_from_day(day_of_month: int, today: date) -> date:
-    """Map a bare day-of-month onto a real date, rolling back a month if it's after today."""
-    year, month = today.year, today.month
-    if day_of_month > today.day:
-        month -= 1
-        if month == 0:
-            month, year = 12, year - 1
-    last_day = calendar.monthrange(year, month)[1]
-    return date(year, month, min(day_of_month, last_day))
+def _date_from_filename(path: Path) -> Optional[date]:
+    """Return the required screenshot date from a YYYY-MM-DD filename component."""
+    match = re.search(r"(\d{4}-\d{2}-\d{2})", path.stem)
+    if not match:
+        return None
+    try:
+        return date.fromisoformat(match.group(1))
+    except ValueError:
+        return None
 
 
-def _fill_missing_date(workouts: list[dict]) -> None:
-    today = date.today()
+def _apply_filename_date(workouts: list[dict], screenshot_date: date) -> None:
+    """Use the filename as the authoritative date for every imported workout."""
     for w in workouts:
-        if not w.get("date"):
-            date_day = w.get("date_day")
-            resolved = _resolve_date_from_day(int(date_day), today) if date_day else today
-            w["date"] = resolved.isoformat()
-        if not w.get("date_day"):
-            w["date_day"] = date.fromisoformat(w["date"]).day
-        if not w.get("day_of_week"):
-            w["day_of_week"] = date.fromisoformat(w["date"]).strftime("%a").upper()
+        w["date"] = screenshot_date.isoformat()
+        w["date_day"] = screenshot_date.day
+        w["day_of_week"] = screenshot_date.strftime("%a").upper()
 
 
 def _workout_id(workout: dict) -> str:
@@ -124,7 +124,69 @@ def _insert(con: duckdb.DuckDBPyConnection, workout: dict) -> None:
     )
 
 
+def _upload_id(image_path: Path) -> str:
+    """Identify an uploaded screenshot by content, independent of its filename."""
+    return hashlib.sha256(image_path.read_bytes()).hexdigest()
+
+
+def _archive_image(image_path: Path, upload_id: str) -> Path:
+    """Keep an immutable local copy without changing OpenClaw's media cache."""
+    destination = PROCESSED_DIR / f"{upload_id}{image_path.suffix.lower()}"
+    if not destination.exists():
+        shutil.copy2(image_path, destination)
+    return destination
+
+
+def process_image(image_path: Path, screenshot_date: date | None = None) -> int:
+    """Extract one screenshot supplied directly by an upload integration.
+
+    The integration supplies the date as metadata; it is used to construct the
+    same filename-derived date that manual drop-folder ingestion requires.
+    """
+    if image_path.suffix.lower() not in IMAGE_EXTS:
+        raise ValueError(f"Unsupported image type: {image_path.suffix or '(none)'}")
+    if not image_path.is_file():
+        raise FileNotFoundError(image_path)
+
+    WORKOUTS_DROP_FOLDER.mkdir(parents=True, exist_ok=True)
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    upload_id = _upload_id(image_path)
+    screenshot_date = screenshot_date or _date_from_filename(image_path)
+    if screenshot_date is None:
+        raise ValueError("A valid YYYY-MM-DD workout date is required.")
+
+    raw = _query_ollama(image_path)
+    workouts = _parse_workouts(raw)
+    if not workouts:
+        raise ValueError(f"Could not parse workout data: {raw[:200]}")
+    _apply_filename_date(workouts, screenshot_date)
+
+    con = duckdb.connect(str(DB_PATH))
+    try:
+        for workout in workouts:
+            _insert(con, workout)
+        record_event(
+            con,
+            event_type="workout_data_imported",
+            source="ingestion.workouts",
+            subject_type="workout_upload",
+            subject_id=upload_id,
+            payload={
+                "date": screenshot_date.isoformat(),
+                "source_file": image_path.name,
+                "workout_count": len(workouts),
+            },
+            dedupe_key=f"workout_upload:{upload_id}",
+        )
+    finally:
+        con.close()
+
+    _archive_image(image_path, upload_id)
+    return len(workouts)
+
+
 def run() -> None:
+    WORKOUTS_DROP_FOLDER.mkdir(parents=True, exist_ok=True)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     images = [p for p in WORKOUTS_DROP_FOLDER.iterdir() if p.suffix.lower() in IMAGE_EXTS]
 
@@ -132,26 +194,29 @@ def run() -> None:
         print("No images found in workouts drop folder.")
         return
 
-    con = duckdb.connect(str(DB_PATH))
-    try:
-        for image_path in images:
-            print(f"Processing {image_path.name}...")
-            try:
-                raw = _query_ollama(image_path)
-                workouts = _parse_workouts(raw)
-                if not workouts:
-                    print(f"  Could not parse response: {raw[:200]}")
-                    continue
-                _fill_missing_date(workouts)
-                for w in workouts:
-                    _insert(con, w)
-                    print(f"  Inserted: {w.get('day_of_week')} | {w.get('name')} | {w.get('structure_type')}")
-                shutil.move(str(image_path), PROCESSED_DIR / image_path.name)
-            except Exception as e:
-                print(f"  Error: {e}")
-    finally:
-        con.close()
+    for image_path in images:
+        print(f"Processing {image_path.name}...")
+        try:
+            count = process_image(image_path)
+            shutil.move(str(image_path), PROCESSED_DIR / image_path.name)
+            print(f"  Imported {count} workout(s).")
+        except Exception as error:
+            print(f"  Error: {error}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Extract workouts from SugarWOD screenshots.")
+    parser.add_argument("--image", type=Path, help="A screenshot provided by an upload integration.")
+    parser.add_argument("--date", type=date.fromisoformat, help="Workout date, in YYYY-MM-DD format.")
+    args = parser.parse_args()
+    if args.image is None:
+        run()
+        return
+    if args.date is None:
+        parser.error("--date is required when --image is used")
+    count = process_image(args.image, args.date)
+    print(f"Imported {count} workout(s) from {args.image.name}.")
 
 
 if __name__ == "__main__":
-    run()
+    main()
