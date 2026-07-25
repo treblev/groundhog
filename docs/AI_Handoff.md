@@ -6,7 +6,7 @@
 
 **Groundhog** is a personal data pipeline and local AI agent. It ingests health, sleep, workout, and stock market data into a single local DuckDB database, runs technical analysis signals, fires macOS alerts on trading signals, and answers natural-language questions about the data via an LLM agent.
 
-**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Core data pipelines have been migrated from Mac to Linux under the `openclaw` service user. The `groundhog-stocks.timer` deployment has completed a successful run through `groundhog-stocks.service`. A deployed `groundhog-openclaw-media.timer` now imports new Telegram screenshots deterministically, without relying on the OpenClaw chat model. Activity-result screenshots go to the existing `activities` table; the one-shot plan mode sends exactly the next image to `workouts` and then resets to activity mode. OpenClaw handles chat, scheduling, and delivery; Groundhog remains the local data and analytics layer. `langgraph_client/client.py` has replaced the hand-rolled `mcp_client/client.py` as the active agent — it uses LangChain's `create_agent()` directly rather than a custom `StateGraph`. `mcp_client/client.py` is kept for reference only.
+**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Production on Linux tracks the `main` branch under the `openclaw` service user. Telegram screenshots are imported deterministically; Telegram text questions use `/ask <question>` to invoke the guarded LangGraph agent. The agent has mutable todos, a 12-tool-call limit, database-grounding retries, and an internal-details disclosure guard. Dedicated tools now cover activity and sleep summaries, workout lookup, data freshness, and a market summary that includes Bitcoin. OpenClaw handles chat, scheduling, and delivery; Groundhog remains the local data and analytics layer.
 
 ---
 
@@ -45,6 +45,8 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 | `mcp_server/server.py` | MCP stdio tool server. Core data tools plus documented service-state tools in `docs/OpenClaw_MCP.md`. |
 | `mcp_client/client.py` | Old hand-rolled agent loop. Replaced. Keep for reference. |
 | `langgraph_client/client.py` | Active agent. Uses LangChain's `create_agent()` with MCP tools wrapped as async Python functions. |
+| `scripts/ask_groundhog.py` | One-question CLI used by Telegram `/ask`; prints only the guarded agent answer. |
+| `deploy/openclaw/skills/groundhog-ask/SKILL.md` | OpenClaw skill that routes Telegram `/ask` messages to `scripts.ask_groundhog`. |
 | `groundhog_service.py` | Service CLI: `run daily-stocks` and `status` |
 | `scripts/daily_stocks.sh` | systemd compatibility entrypoint to `groundhog_service.py run daily-stocks` |
 | `scripts/openclaw_deliver_outbox.py` | OpenClaw-side delivery bridge: Groundhog MCP outbox → OpenClaw Telegram → mark delivered on success. |
@@ -62,18 +64,16 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 
 **In progress:**
 - Optional daemon lifecycle verification: restart behavior and reboot behavior under linger.
-- See `TODO.md` for current `langgraph_client` work: `ToolRetryMiddleware` for malformed tool calls, a `write_todos` mutable planning tool, and prompting the agent to revisit its plan after each tool result.
 
 **Planned features:**
 - Cross-source insights: "how does sleep affect workout performance?" (requires JOIN across sleep_metrics + workouts)
-- Agent querying workouts table (already in DB, just needs schema hints in context)
+- Cross-source readiness and coaching insights using the dedicated activity, sleep, and workout tools
 - Advanced RAG: entity-aware memory, retrieval evaluation
 - M6 Production hardening: evals, observability, prompt versioning, guardrails
 
 **Known open items:**
-- Sleep data has only a few test rows; no automated ingestion trigger yet (manual drop-and-run)
 - The media watcher treats incoming images as activity results by default. Before a SugarWOD plan upload, arm exactly one plan with `python -m scripts.import_openclaw_activity_media --next-kind plan` on Linux; it resets after that one file.
-- `notebooks/agent_prompt_evals.ipynb` has uncommitted changes (visible in git status)
+- Before a sleep screenshot upload, arm exactly one sleep import with `python -m scripts.import_openclaw_activity_media --next-kind sleep` on Linux; it also resets after one file.
 
 ---
 
@@ -252,6 +252,11 @@ In order (most recent last):
 - Rewrote `langgraph_client/client.py` to use `create_agent()` instead of a hand-built `StateGraph`
 - Fixed broken tool wrappers in `langgraph_client`
 - Added Groundhog service run tracking, events, outbox rows, service-state MCP tools, local summary artifacts, and optional daemon mode
+- Added deterministic Telegram sleep uploads, pool-swim metrics, and Telegram import confirmations
+- Added guarded Telegram `/ask` queries through LangGraph and OpenClaw's `groundhog-ask` skill
+- Added tool-call limits, grounding retries, and internal-details response protection
+- Added dedicated activity summary, sleep summary, workout lookup, data freshness, and Bitcoin-inclusive market-summary tools
+- Promoted the tested `long-running-agent` history into `main`; Linux production now tracks `main`
 
 ---
 
@@ -269,8 +274,4 @@ In order (most recent last):
 
 ## 14. Suggested Next Task for Codex
 
-See `TODO.md` for the current punch list on `langgraph_client/client.py`:
-
-1. Add `ToolRetryMiddleware` (from `langchain.agents.middleware`) — `qwen3.6:latest` occasionally emits a tool call as literal text content instead of a structured `tool_calls` entry, and nothing currently catches it.
-2. Add a `write_todos`-style mutable planning tool the agent can call and revise mid-loop, instead of a frozen upfront plan.
-3. Add replanning: prompt the agent to check each new tool result against its current plan before proceeding, rather than assuming a mutable todo list alone fixes plan-drift bugs.
+The only current TODO is the optional notebook prompt-override workflow in `TODO.md`. Keep the production branch on `main`; use short-lived feature branches for future work and promote them only after tests pass.

@@ -5,6 +5,7 @@ Current Linux deployment assumptions:
 - Host: `192.168.1.38`
 - Service user: `openclaw`
 - Repo: `/home/openclaw/apps/groundhog`
+- Deployment branch: `main` (tracks `origin/main`)
 - DuckDB: `/home/openclaw/data/groundhog/groundhog.duckdb`
 - OpenClaw gateway: user systemd service on `127.0.0.1:18789`
 - Ollama: `http://192.168.1.13:11434`
