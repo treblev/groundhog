@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -41,5 +42,38 @@ class HealthUploadTests(unittest.TestCase):
                     (date(2026, 7, 24), "strength training", 1800, 140),
                 )
                 self.assertEqual(con.execute("SELECT COUNT(*) FROM workouts").fetchone()[0], 0)
+            finally:
+                con.close()
+
+    def test_pool_swim_upload_preserves_swim_specific_fields_and_units(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "groundhog.duckdb"
+            image_path = temp_path / "telegram-swim.png"
+            image_path.write_bytes(b"pool swim screenshot")
+            schema.init_db(db_path)
+            response = (
+                '[{"type":"activity","month_day":"07-24","activity_type":"pool swim",'
+                '"distance_miles":null,"duration_seconds":1800,"avg_pace_seconds_per_mile":null,'
+                '"avg_hr":128,"max_hr":150,"calories":280,"pool_distance":1500,'
+                '"pool_distance_unit":"yards","laps":60,"stroke":"freestyle",'
+                '"swim_pace_seconds_per_100":95,"swim_pace_unit":"yards"}]'
+            )
+            with (
+                patch.object(health, "DB_PATH", db_path),
+                patch.object(health, "PROCESSED_DIR", temp_path / "processed"),
+                patch.object(health, "_query_ollama", return_value=response),
+            ):
+                health.process_image(image_path, date(2026, 7, 24))
+
+            con = duckdb.connect(str(db_path), read_only=True)
+            try:
+                self.assertEqual(
+                    con.execute(
+                        "SELECT pool_distance, pool_distance_unit, laps, stroke, "
+                        "swim_pace_seconds_per_100, swim_pace_unit FROM activities"
+                    ).fetchone(),
+                    (Decimal("1500.00"), "yards", 60, "freestyle", 95, "yards"),
+                )
             finally:
                 con.close()

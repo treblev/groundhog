@@ -87,6 +87,12 @@ def init_db(db_path: Path | str | None = None):
             avg_hr INTEGER,
             max_hr INTEGER,
             calories INTEGER,
+            pool_distance DECIMAL(7,2),
+            pool_distance_unit VARCHAR,
+            laps INTEGER,
+            stroke VARCHAR,
+            swim_pace_seconds_per_100 INTEGER,
+            swim_pace_unit VARCHAR,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -94,6 +100,12 @@ def init_db(db_path: Path | str | None = None):
     con.execute("""
         ALTER TABLE activities ADD COLUMN IF NOT EXISTS max_hr INTEGER
     """)
+    con.execute("ALTER TABLE activities ADD COLUMN IF NOT EXISTS pool_distance DECIMAL(7,2)")
+    con.execute("ALTER TABLE activities ADD COLUMN IF NOT EXISTS pool_distance_unit VARCHAR")
+    con.execute("ALTER TABLE activities ADD COLUMN IF NOT EXISTS laps INTEGER")
+    con.execute("ALTER TABLE activities ADD COLUMN IF NOT EXISTS stroke VARCHAR")
+    con.execute("ALTER TABLE activities ADD COLUMN IF NOT EXISTS swim_pace_seconds_per_100 INTEGER")
+    con.execute("ALTER TABLE activities ADD COLUMN IF NOT EXISTS swim_pace_unit VARCHAR")
 
     con.execute("""
         CREATE TABLE IF NOT EXISTS sleep_metrics (

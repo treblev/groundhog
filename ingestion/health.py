@@ -42,7 +42,13 @@ If this is an ACTIVITY screen, return a JSON array with one object per activity 
     "avg_pace_seconds_per_mile": <integer or null>,
     "avg_hr": <integer or null>,
     "max_hr": <integer or null>,
-    "calories": <integer or null>
+    "calories": <integer or null>,
+    "pool_distance": <float or null; pool swims only>,
+    "pool_distance_unit": <"yards", "meters", or null; pool swims only>,
+    "laps": <integer or null; pool swims only>,
+    "stroke": <string or null; pool swims only>,
+    "swim_pace_seconds_per_100": <integer or null; pool swims only>,
+    "swim_pace_unit": <"yards", "meters", or null; pool swims only>
   }
 ]
 
@@ -136,16 +142,24 @@ def _insert_activity(con: duckdb.DuckDBPyConnection, metrics: dict) -> None:
         """
         INSERT INTO activities (
             id, date, activity_type, distance_miles, duration_seconds,
-            avg_pace_seconds_per_mile, avg_hr, max_hr, calories
+            avg_pace_seconds_per_mile, avg_hr, max_hr, calories,
+            pool_distance, pool_distance_unit, laps, stroke,
+            swim_pace_seconds_per_100, swim_pace_unit
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (id) DO UPDATE SET
             distance_miles = COALESCE(excluded.distance_miles, activities.distance_miles),
             duration_seconds = COALESCE(excluded.duration_seconds, activities.duration_seconds),
             avg_pace_seconds_per_mile = COALESCE(excluded.avg_pace_seconds_per_mile, activities.avg_pace_seconds_per_mile),
             avg_hr = COALESCE(excluded.avg_hr, activities.avg_hr),
             max_hr = COALESCE(excluded.max_hr, activities.max_hr),
-            calories = COALESCE(excluded.calories, activities.calories)
+            calories = COALESCE(excluded.calories, activities.calories),
+            pool_distance = COALESCE(excluded.pool_distance, activities.pool_distance),
+            pool_distance_unit = COALESCE(excluded.pool_distance_unit, activities.pool_distance_unit),
+            laps = COALESCE(excluded.laps, activities.laps),
+            stroke = COALESCE(excluded.stroke, activities.stroke),
+            swim_pace_seconds_per_100 = COALESCE(excluded.swim_pace_seconds_per_100, activities.swim_pace_seconds_per_100),
+            swim_pace_unit = COALESCE(excluded.swim_pace_unit, activities.swim_pace_unit)
         """,
         [
             activity_id,
@@ -157,6 +171,12 @@ def _insert_activity(con: duckdb.DuckDBPyConnection, metrics: dict) -> None:
             metrics.get("avg_hr"),
             metrics.get("max_hr"),
             metrics.get("calories"),
+            metrics.get("pool_distance"),
+            metrics.get("pool_distance_unit"),
+            metrics.get("laps"),
+            metrics.get("stroke"),
+            metrics.get("swim_pace_seconds_per_100"),
+            metrics.get("swim_pace_unit"),
         ],
     )
 
