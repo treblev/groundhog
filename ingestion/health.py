@@ -36,7 +36,7 @@ If this is an ACTIVITY screen, return a JSON array with one object per activity 
   {
     "type": "activity",
     "month_day": "MM-DD",
-    "activity_type": <"running", "walking", "cycling", "strength training", "cardio" or "other">,
+    "activity_type": <"running", "walking", "cycling", "pool swim", "strength training", "cardio" or "other">,
     "distance_miles": <float or null>,
     "duration_seconds": <integer or null>,
     "avg_pace_seconds_per_mile": <integer or null>,

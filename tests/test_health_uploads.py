@@ -13,6 +13,9 @@ from ingestion import health, schema
 
 
 class HealthUploadTests(unittest.TestCase):
+    def test_prompt_allows_pool_swim_activities(self):
+        self.assertIn('"pool swim"', health.PROMPT)
+
     def test_direct_upload_writes_to_existing_activities_table(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
