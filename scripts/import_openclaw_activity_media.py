@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from config.settings import OPENCLAW_MEDIA_INBOUND_DIR, OPENCLAW_MEDIA_STATE_PATH
 from ingestion.health import IMAGE_EXTS, process_image
+from ingestion.sleep import process_image as process_sleep
 from ingestion.workouts import process_image as process_workout_plan
 
 PHOENIX = ZoneInfo("America/Phoenix")
@@ -46,7 +47,7 @@ def _images(inbound_dir: Path) -> list[Path]:
 
 
 def set_next_kind(state_path: Path, kind: str) -> None:
-    if kind not in {"activity", "plan"}:
+    if kind not in {"activity", "plan", "sleep"}:
         raise ValueError(f"Unsupported upload type: {kind}")
     state = _load_state(state_path)
     state[NEXT_KIND_KEY] = {"kind": kind}
@@ -55,7 +56,7 @@ def set_next_kind(state_path: Path, kind: str) -> None:
 
 def _next_kind(state: dict[str, dict]) -> str:
     next_kind = state.pop(NEXT_KIND_KEY, {}).get("kind", "activity")
-    return next_kind if next_kind in {"activity", "plan"} else "activity"
+    return next_kind if next_kind in {"activity", "plan", "sleep"} else "activity"
 
 
 def run(
@@ -88,6 +89,10 @@ def run(
                 screenshot_date = datetime.fromtimestamp(image_path.stat().st_mtime, PHOENIX).date()
                 records = process_workout_plan(image_path, screenshot_date)
                 record_count = records
+            elif kind == "sleep":
+                screenshot_date = datetime.fromtimestamp(image_path.stat().st_mtime, PHOENIX).date()
+                records = process_sleep(image_path, screenshot_date)
+                record_count = 1
             else:
                 records = process_image(image_path)
                 record_count = len(records)
@@ -109,10 +114,10 @@ def run(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import new OpenClaw activity screenshots.")
     parser.add_argument("--initialize", action="store_true", help="Record current images without importing them.")
-    parser.add_argument("--next-kind", choices=["activity", "plan"], help="Use this type for exactly the next image.")
+    parser.add_argument("--next-kind", choices=["activity", "plan", "sleep"], help="Use this type for exactly the next image.")
     parser.add_argument(
         "--all-new-kind",
-        choices=["activity", "plan"],
+        choices=["activity", "plan", "sleep"],
         help="Use this type for every image currently waiting to be imported.",
     )
     parser.add_argument("--inbound-dir", type=Path, default=OPENCLAW_MEDIA_INBOUND_DIR)

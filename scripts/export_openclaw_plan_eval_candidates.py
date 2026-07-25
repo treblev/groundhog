@@ -15,8 +15,8 @@ from scripts.import_openclaw_activity_media import _load_state
 PHOENIX = ZoneInfo("America/Phoenix")
 
 
-def export(state_path: Path, output_dir: Path) -> int:
-    """Copy imported plan images once and register them as review-pending examples."""
+def export(state_path: Path, output_dir: Path, kind: str = "plan") -> int:
+    """Copy imported images of one type once and register review-pending examples."""
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "manifest.json"
     existing = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"examples": []}
@@ -25,7 +25,7 @@ def export(state_path: Path, output_dir: Path) -> int:
 
     added = 0
     for upload_id, record in _load_state(state_path).items():
-        if record.get("status") != "imported" or record.get("kind") != "plan" or upload_id in known:
+        if record.get("status") != "imported" or record.get("kind") != kind or upload_id in known:
             continue
         source = Path(record["path"])
         if not source.is_file():
@@ -53,8 +53,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-path", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--kind", choices=["plan", "sleep"], default="plan")
     args = parser.parse_args()
-    print(f"Exported {export(args.state_path, args.output_dir)} workout-plan evaluation candidate(s).")
+    print(f"Exported {export(args.state_path, args.output_dir, args.kind)} {args.kind} evaluation candidate(s).")
 
 
 if __name__ == "__main__":

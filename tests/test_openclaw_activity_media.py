@@ -91,3 +91,20 @@ class OpenClawActivityMediaTests(unittest.TestCase):
 
             self.assertEqual(plan.call_count, 2)
             self.assertTrue(all(record["kind"] == "plan" for record in watcher._load_state(state_path).values()))
+
+    def test_next_sleep_uses_sleep_importer(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            inbound = root / "inbound"
+            inbound.mkdir()
+            state_path = root / "state.json"
+            watcher.set_next_kind(state_path, "sleep")
+            image = inbound / "sleep.jpg"
+            image.write_bytes(b"sleep")
+
+            with patch.object(watcher, "process_sleep", return_value={"hrv": 50}) as process:
+                self.assertEqual(watcher.run(inbound, state_path), 1)
+
+            process.assert_called_once()
+            state = watcher._load_state(state_path)
+            self.assertEqual(next(iter(state.values()))["kind"], "sleep")

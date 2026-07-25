@@ -4,9 +4,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import base64
+import hashlib
 import json
 import re
 import shutil
+from datetime import date
 from typing import Optional
 
 import duckdb
@@ -86,6 +88,43 @@ def _date_from_filename(path: Path) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _upload_id(image_path: Path) -> str:
+    return hashlib.sha256(image_path.read_bytes()).hexdigest()
+
+
+def _archive_image(image_path: Path, upload_id: str) -> Path:
+    """Preserve a local upload copy without changing OpenClaw's media cache."""
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    destination = PROCESSED_DIR / f"{upload_id}{image_path.suffix.lower()}"
+    if not destination.exists():
+        shutil.copy2(image_path, destination)
+    return destination
+
+
+def process_image(image_path: Path, screenshot_date: date | None = None) -> dict:
+    """Extract one sleep screenshot supplied by an upload integration."""
+    if image_path.suffix.lower() not in IMAGE_EXTS:
+        raise ValueError(f"Unsupported image type: {image_path.suffix or '(none)'}")
+    if not image_path.is_file():
+        raise FileNotFoundError(image_path)
+
+    date_value = screenshot_date.isoformat() if screenshot_date else _date_from_filename(image_path)
+    if not date_value:
+        raise ValueError("A valid YYYY-MM-DD sleep date is required.")
+    raw = _query_ollama(image_path)
+    metrics = _parse_metrics(raw)
+    if not metrics:
+        raise ValueError(f"Could not parse sleep data: {raw[:200]}")
+    metrics["date"] = date_value
+    con = duckdb.connect(str(DB_PATH))
+    try:
+        _insert(con, metrics)
+    finally:
+        con.close()
+    _archive_image(image_path, _upload_id(image_path))
+    return metrics
+
+
 def run() -> None:
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     images = [p for p in SLEEP_DROP_FOLDER.iterdir() if p.suffix.lower() in IMAGE_EXTS]
@@ -94,28 +133,18 @@ def run() -> None:
         print("No images found in sleep8 drop folder.")
         return
 
-    con = duckdb.connect(str(DB_PATH))
-    try:
-        for image_path in images:
-            print(f"Processing {image_path.name}...")
-            date = _date_from_filename(image_path)
-            if not date:
-                print(f"  Skipping: no YYYY-MM-DD date found in filename.")
-                continue
-            try:
-                raw = _query_ollama(image_path)
-                metrics = _parse_metrics(raw)
-                if not metrics:
-                    print(f"  Could not parse response: {raw[:200]}")
-                    continue
-                metrics["date"] = date
-                _insert(con, metrics)
-                print(f"  Inserted: {metrics}")
-                shutil.move(str(image_path), PROCESSED_DIR / image_path.name)
-            except Exception as e:
-                print(f"  Error: {e}")
-    finally:
-        con.close()
+    for image_path in images:
+        print(f"Processing {image_path.name}...")
+        date = _date_from_filename(image_path)
+        if not date:
+            print(f"  Skipping: no YYYY-MM-DD date found in filename.")
+            continue
+        try:
+            metrics = process_image(image_path)
+            print(f"  Inserted: {metrics}")
+            shutil.move(str(image_path), PROCESSED_DIR / image_path.name)
+        except Exception as e:
+            print(f"  Error: {e}")
 
 
 if __name__ == "__main__":
