@@ -14,10 +14,8 @@ from mcp.types import TextContent, Tool
 from agent.memory import remember, recall
 from agent.outbox import set_outbox_status
 from config.settings import DB_PATH
-from ingestion.schema import init_db
 
 server = Server("groundhog")
-init_db(DB_PATH)
 
 
 @server.list_tools()
