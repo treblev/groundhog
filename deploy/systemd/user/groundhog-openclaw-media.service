@@ -8,4 +8,5 @@ Environment=TZ=America/Phoenix
 Environment=GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb
 Environment=GROUNDHOG_OPENCLAW_MEDIA_INBOUND_DIR=/home/openclaw/media/inbound
 Environment=GROUNDHOG_OPENCLAW_MEDIA_STATE_PATH=/home/openclaw/data/groundhog/openclaw_activity_media_state.json
+ExecStartPre=/home/openclaw/apps/groundhog/venv/bin/python ingestion/schema.py
 ExecStart=/home/openclaw/apps/groundhog/venv/bin/python -m scripts.import_openclaw_activity_media
