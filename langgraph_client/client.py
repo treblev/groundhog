@@ -273,7 +273,31 @@ async def _build_schema(session: ClientSession) -> str:
     return _DUCKDB_DIALECT + "\n".join(schema_parts)
 
 
-async def run():
+def _system_prompt(schema: str) -> str:
+    return (
+        "You are a personal data assistant with access to tools that query a local database.\n"
+        "Use tools to answer factual questions about the user's personal data. Do not guess — "
+        "ground each factual claim in results from tools called during this question.\n"
+        "Call only the tools needed. Once you have enough information, stop and give your final answer.\n"
+        "After every tool result, re-check the current question and your todo plan before proceeding. "
+        "Revise the plan when a result contradicts an assumption, adds a needed step, or makes a step unnecessary.\n"
+        "When a tool returns data, interpret it directly. Do not call additional tools to verify.\n"
+        "If a table returns only null/empty data, immediately call run_sql on related tables "
+        "(e.g. sleep_metrics, workouts) yourself before answering. Do not ask the user for "
+        "permission to check — just check.\n"
+        "For comparison queries: if only one period appears, the missing period is zero.\n"
+        "NEVER call remember() unless the user explicitly says 'remember' or 'save'.\n"
+        "Call recall() ONLY for questions about personal opinions, preferences, or stated beliefs.\n"
+        f"\nDatabase schema:\n{schema}"
+    )
+
+
+async def ask_question(question: str) -> str:
+    """Answer one user question through the guarded local Groundhog agent."""
+    question = question.strip()
+    if not question:
+        raise ValueError("question must not be empty")
+
     params = StdioServerParameters(
         command=sys.executable,
         args=[SERVER_SCRIPT],
@@ -290,42 +314,35 @@ async def run():
                 model=ChatOllama(model=OLLAMA_SQL_MODEL, base_url=OLLAMA_BASE_URL),
                 tools=tools,
                 middleware=_make_middleware(),
-                system_prompt=(
-                    "You are a personal data assistant with access to tools that query a local database.\n"
-                    "Use tools to answer factual questions about the user's personal data. Do not guess — "
-                    "ground each factual claim in results from tools called during this question.\n"
-                    "Call only the tools needed. Once you have enough information, stop and give your final answer.\n"
-                    "After every tool result, re-check the current question and your todo plan before proceeding. "
-                    "Revise the plan when a result contradicts an assumption, adds a needed step, or makes a step unnecessary.\n"
-                    "When a tool returns data, interpret it directly. Do not call additional tools to verify.\n"
-                    "If a table returns only null/empty data, immediately call run_sql on related tables "
-                    "(e.g. sleep_metrics, workouts) yourself before answering. Do not ask the user for "
-                    "permission to check — just check.\n"
-                    "For comparison queries: if only one period appears, the missing period is zero.\n"
-                    "NEVER call remember() unless the user explicitly says 'remember' or 'save'.\n"
-                    "Call recall() ONLY for questions about personal opinions, preferences, or stated beliefs.\n"
-                    f"\nDatabase schema:\n{schema}"
-                ),
+                system_prompt=_system_prompt(schema),
             )
 
-            print(f"Groundhog Agent — {len(tools)} tools loaded. Type 'exit' to quit.\n")
+            result = await agent.ainvoke({"messages": [{"role": "user", "content": question}]})
+            return str(result["messages"][-1].content)
 
-            while True:
-                try:
-                    question = input("You: ").strip()
-                except (EOFError, KeyboardInterrupt):
-                    print("\nBye.")
-                    break
 
-                if not question:
-                    continue
-                if question.lower() in {"exit", "quit"}:
-                    print("Bye.")
-                    break
+async def run():
+    print("Groundhog Agent — guarded local tools loaded. Type 'exit' to quit.\n")
 
-                result = await agent.ainvoke({"messages": [{"role": "user", "content": question}]})
-                answer = result["messages"][-1].content
-                print(f"Agent: {answer}\n")
+    while True:
+        try:
+            question = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nBye.")
+            break
+
+        if not question:
+            continue
+        if question.lower() in {"exit", "quit"}:
+            print("Bye.")
+            break
+
+        try:
+            answer = await ask_question(question)
+        except Exception as error:
+            print(f"Agent error: {error}\n")
+        else:
+            print(f"Agent: {answer}\n")
 
 
 if __name__ == "__main__":
