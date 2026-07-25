@@ -76,14 +76,72 @@ Event conventions:
 
 Stock alerts create one `pending` outbox row. `pending`, `delivered`, `failed`,
 and `discarded` are the supported delivery statuses. Groundhog never sends an
-outbox item itself; OpenClaw will read and update this table through MCP in a
-later phase.
+outbox item itself; OpenClaw reads and updates this table through MCP.
 
 Inspect pending delivery items with their source facts:
 
 ```bash
 venv/bin/python -c "import duckdb; from config.settings import DB_PATH; con = duckdb.connect(str(DB_PATH)); print(con.execute(\"SELECT o.id, e.event_type, e.payload, o.created_at FROM outbox o JOIN events e ON e.id = o.event_id WHERE o.status = 'pending' ORDER BY o.created_at\").fetchall())"
 ```
+
+## OpenClaw Telegram Delivery
+
+OpenClaw Telegram is configured on the Linux host with:
+
+- account: `default`
+- display name: `groundhog-telegram`
+- token source: `/home/openclaw/.openclaw/secrets/telegram_bot_token`
+- target chat id: `8243406239`
+
+OpenClaw's Groundhog MCP server must use the Linux venv:
+
+```text
+mcp.servers.groundhog.command=/home/openclaw/apps/groundhog/venv/bin/python
+```
+
+Verify the channel and MCP server:
+
+```bash
+openclaw channels status --deep
+openclaw mcp probe groundhog
+```
+
+The delivery bridge is:
+
+```bash
+GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb \
+  OPENCLAW_TELEGRAM_TARGET=8243406239 \
+  venv/bin/python scripts/openclaw_deliver_outbox.py
+```
+
+It calls `get_pending_outbox`, sends each pending message with
+`openclaw message send --channel telegram`, and calls `mark_outbox_delivered`
+only after Telegram delivery succeeds.
+
+OpenClaw cron runs the bridge every 15 minutes:
+
+```text
+name: groundhog-outbox-telegram
+id: 201d4f1c-6ad5-41b3-859f-2b8ab70f3ab3
+schedule: every 15m
+delivery.mode: none
+env: GROUNDHOG_DB_PATH, OPENCLAW_TELEGRAM_TARGET
+```
+
+Useful checks:
+
+```bash
+openclaw cron show groundhog-outbox-telegram --json
+openclaw cron run 201d4f1c-6ad5-41b3-859f-2b8ab70f3ab3 --wait --wait-timeout 2m
+openclaw cron runs
+```
+
+Verified delivery path:
+
+- EXC stock alert delivered through Telegram and marked `delivered`.
+- Synthetic `Groundhog Telegram delivery test -- ignore` outbox row delivered
+  through the cron job and marked `delivered`.
+- Pending outbox count returned to `0`.
 
 ## systemd User Timer
 
@@ -111,6 +169,11 @@ systemctl --user start groundhog-stocks.service
 
 Linger is already enabled for `openclaw`, so the timer can run without an
 active login session.
+
+The deployed Linux timer has completed successfully through
+`groundhog-stocks.service`. That verifies the default timer path. It does not
+verify optional daemon restart or reboot behavior; keep those checks separate if
+daemon mode is enabled later.
 
 ## Optional Daemon Mode
 

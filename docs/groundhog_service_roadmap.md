@@ -190,7 +190,7 @@ Replace loose script chaining with one stable operational command surface.
 - [x] Add tests for runner success and failure paths.
 - [x] Run offline regression tests.
 - [x] Run live smoke tests.
-- [ ] Manually run `groundhog-stocks.service`.
+- [x] Manually run `groundhog-stocks.service`.
 
 ### Review Gate
 
@@ -224,7 +224,7 @@ OpenClaw can answer: "What happened today?" using Groundhog tools.
 
 ## Phase 6: Always-On Mode
 
-Status: Implemented; Linux lifecycle verification pending
+Status: Implemented; optional daemon Linux lifecycle verification pending
 
 ### Goal
 

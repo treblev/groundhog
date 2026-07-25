@@ -6,7 +6,7 @@
 
 **Groundhog** is a personal data pipeline and local AI agent. It ingests health, sleep, workout, and stock market data into a single local DuckDB database, runs technical analysis signals, fires macOS alerts on trading signals, and answers natural-language questions about the data via an LLM agent.
 
-**Current status:** Milestone 5 complete. Core data pipelines have been migrated from Mac to Linux under the `openclaw` service user. Stock jobs are ready to run via a systemd user timer. OpenClaw handles chat, scheduling, and delivery; Groundhog remains the local data and analytics layer. `langgraph_client/client.py` has replaced the hand-rolled `mcp_client/client.py` as the active agent — it uses LangChain's `create_agent()` directly rather than a custom `StateGraph`. `mcp_client/client.py` is kept for reference only.
+**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Core data pipelines have been migrated from Mac to Linux under the `openclaw` service user. The `groundhog-stocks.timer` deployment has completed a successful run through `groundhog-stocks.service`. OpenClaw handles chat, scheduling, and delivery; Groundhog remains the local data and analytics layer. `langgraph_client/client.py` has replaced the hand-rolled `mcp_client/client.py` as the active agent — it uses LangChain's `create_agent()` directly rather than a custom `StateGraph`. `mcp_client/client.py` is kept for reference only.
 
 ---
 
@@ -46,9 +46,11 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 | `langgraph_client/client.py` | Active agent. Uses LangChain's `create_agent()` with MCP tools wrapped as async Python functions. |
 | `groundhog_service.py` | Service CLI: `run daily-stocks` and `status` |
 | `scripts/daily_stocks.sh` | systemd compatibility entrypoint to `groundhog_service.py run daily-stocks` |
+| `scripts/openclaw_deliver_outbox.py` | OpenClaw-side delivery bridge: Groundhog MCP outbox → OpenClaw Telegram → mark delivered on success. |
 | `scripts/update_watchlist.py` | Scrapes Nasdaq-100 from Wikipedia, merges into watchlist.txt. |
 | `deploy/systemd/user/groundhog-stocks.service` | systemd user service for the daily stock pipeline. |
 | `deploy/systemd/user/groundhog-stocks.timer` | systemd user timer, runs 5pm America/Phoenix on weekdays. |
+| `deploy/systemd/user/groundhog-daemon.service` | Optional always-on daemon service; do not enable alongside the timer. |
 | `docs/Linux_Operations.md` | Linux host runbook for stock jobs and the systemd user timer. |
 
 ---
@@ -56,6 +58,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 ## 4. Current TODOs and Open Bugs
 
 **In progress:**
+- Optional daemon lifecycle verification: restart behavior and reboot behavior under linger.
 - See `TODO.md` for current `langgraph_client` work: `ToolRetryMiddleware` for malformed tool calls, a `write_todos` mutable planning tool, and prompting the agent to revisit its plan after each tool result.
 
 **Planned features:**
@@ -228,6 +231,8 @@ In order (most recent last):
 - Implemented Supertrend (daily + weekly), verified against Pine Script
 - Implemented `analytics/alerts.py` with optional platform notification backends and dedup
 - Added Linux systemd user timer templates for `openclaw`
+- Verified the Linux timer path completes successfully through `groundhog-stocks.service`
+- Configured OpenClaw Telegram delivery and scheduled `groundhog-outbox-telegram` to deliver Groundhog outbox rows every 15 minutes
 - Expanded watchlist from 6 to 105 tickers (Nasdaq-100 via `scripts/update_watchlist.py`)
 - Fixed DuckDB rowcount -1 bug
 - Fixed NaN handling for ADI/LIN
@@ -236,6 +241,7 @@ In order (most recent last):
 - Enriched MCP agent schema context (stock_signals, stock_alerts, workouts hints)
 - Rewrote `langgraph_client/client.py` to use `create_agent()` instead of a hand-built `StateGraph`
 - Fixed broken tool wrappers in `langgraph_client`
+- Added Groundhog service run tracking, events, outbox rows, service-state MCP tools, local summary artifacts, and optional daemon mode
 
 ---
 

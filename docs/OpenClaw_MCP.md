@@ -17,6 +17,11 @@ facts and state; OpenClaw chooses the user-facing wording and delivery channel.
 not change the original event. OpenClaw must only call it after successful
 delivery through its own configured channel.
 
+The Linux deployment uses `scripts/openclaw_deliver_outbox.py` for Telegram
+delivery. It reads pending rows through `get_pending_outbox`, sends through
+OpenClaw's Telegram channel, and calls `mark_outbox_delivered` only after a
+successful send response.
+
 ## Local LLM Boundary
 
 Groundhog may use the configured local Ollama model to create daily summaries
