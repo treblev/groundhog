@@ -58,7 +58,12 @@ def _next_kind(state: dict[str, dict]) -> str:
     return next_kind if next_kind in {"activity", "plan"} else "activity"
 
 
-def run(inbound_dir: Path | None, state_path: Path, initialize: bool = False) -> int:
+def run(
+    inbound_dir: Path | None,
+    state_path: Path,
+    initialize: bool = False,
+    force_kind: str | None = None,
+) -> int:
     """Process each attachment once; initialization records current files without importing them."""
     if not inbound_dir:
         raise ValueError("GROUNDHOG_OPENCLAW_MEDIA_INBOUND_DIR must be configured.")
@@ -77,7 +82,7 @@ def run(inbound_dir: Path | None, state_path: Path, initialize: bool = False) ->
         image_id = _file_id(image_path)
         if image_id in state:
             continue
-        kind = _next_kind(state)
+        kind = force_kind or _next_kind(state)
         try:
             if kind == "plan":
                 screenshot_date = datetime.fromtimestamp(image_path.stat().st_mtime, PHOENIX).date()
@@ -105,6 +110,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Import new OpenClaw activity screenshots.")
     parser.add_argument("--initialize", action="store_true", help="Record current images without importing them.")
     parser.add_argument("--next-kind", choices=["activity", "plan"], help="Use this type for exactly the next image.")
+    parser.add_argument(
+        "--all-new-kind",
+        choices=["activity", "plan"],
+        help="Use this type for every image currently waiting to be imported.",
+    )
     parser.add_argument("--inbound-dir", type=Path, default=OPENCLAW_MEDIA_INBOUND_DIR)
     parser.add_argument("--state-path", type=Path, default=OPENCLAW_MEDIA_STATE_PATH)
     args = parser.parse_args()
@@ -112,7 +122,7 @@ def main() -> None:
         set_next_kind(args.state_path, args.next_kind)
         print(f"Next OpenClaw image will be imported as a {args.next_kind}.")
         return
-    run(args.inbound_dir, args.state_path, args.initialize)
+    run(args.inbound_dir, args.state_path, args.initialize, args.all_new_kind)
 
 
 if __name__ == "__main__":

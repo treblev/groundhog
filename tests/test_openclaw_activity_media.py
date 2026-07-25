@@ -76,3 +76,18 @@ class OpenClawActivityMediaTests(unittest.TestCase):
 
             plan.assert_called_once()
             activity.assert_called_once_with(activity_image)
+
+    def test_force_kind_applies_to_every_currently_pending_attachment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            inbound = root / "inbound"
+            inbound.mkdir()
+            state_path = root / "state.json"
+            (inbound / "plan-one.jpg").write_bytes(b"one")
+            (inbound / "plan-two.jpg").write_bytes(b"two")
+
+            with patch.object(watcher, "process_workout_plan", return_value=1) as plan:
+                self.assertEqual(watcher.run(inbound, state_path, force_kind="plan"), 2)
+
+            self.assertEqual(plan.call_count, 2)
+            self.assertTrue(all(record["kind"] == "plan" for record in watcher._load_state(state_path).values()))
