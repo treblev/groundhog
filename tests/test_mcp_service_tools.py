@@ -46,6 +46,11 @@ class McpServiceToolTests(unittest.TestCase):
         self.outbox_id = self.con.execute(
             "SELECT id FROM outbox WHERE event_id = ?", [self.event_id]
         ).fetchone()[0]
+        self.con.execute("INSERT INTO activities (id, date, activity_type, distance_miles, duration_seconds, avg_hr) VALUES ('activity-1', '2026-07-24', 'running', 2.5, 1800, 140)")
+        self.con.execute("INSERT INTO sleep_metrics (date, resting_hr, hrv, breath_rate, deep_sleep_minutes) VALUES ('2026-07-24', 52, 60, 14.2, 90)")
+        self.con.execute("INSERT INTO workouts (id, date, day_of_week, name, category, structure_type, description) VALUES ('workout-1', '2026-07-24', 'THU', 'Intervals', 'running', 'intervals', 'Run intervals')")
+        self.con.execute("INSERT INTO stock_watchlist (date, ticker, closing_price) VALUES ('2026-07-23', 'BTC-USD', 100000), ('2026-07-24', 'BTC-USD', 101000)")
+        self.con.execute("INSERT INTO stock_signals (id, date, ticker, signal_type, timeframe, value, direction) VALUES ('signal-1', '2026-07-24', 'BTC-USD', 'supertrend', 'daily', 99000, 'bullish')")
 
     def tearDown(self):
         self.con.close()
@@ -83,6 +88,25 @@ class McpServiceToolTests(unittest.TestCase):
             self._dispatch("mark_outbox_delivered", {"outbox_id": "missing"})
         )
         self.assertIn("error", result)
+
+    def test_personal_data_summary_tools_return_expected_data(self):
+        activities = json.loads(self._dispatch("get_activity_summary", {}))
+        sleep = json.loads(self._dispatch("get_sleep_summary", {}))
+        workout = json.loads(self._dispatch("get_workout_for_date", {"date": "2026-07-24"}))
+        freshness = json.loads(self._dispatch("get_data_freshness", {}))
+
+        self.assertEqual(activities[0]["activity_count"], 1)
+        self.assertEqual(activities[0]["total_distance_miles"], 2.5)
+        self.assertEqual(sleep[0]["average_hrv"], 60.0)
+        self.assertEqual(workout[0]["name"], "Intervals")
+        self.assertEqual({row["source"] for row in freshness}, {"activities", "health_metrics", "sleep_metrics", "stock_prices", "stock_signals", "workouts"})
+
+    def test_market_summary_includes_bitcoin(self):
+        summary = json.loads(self._dispatch("get_market_summary", {}))
+
+        self.assertEqual(summary["bitcoin"]["price"], 101000.0)
+        self.assertEqual(summary["bitcoin"]["change_percent"], 1.0)
+        self.assertEqual(summary["bitcoin_supertrend"][0]["direction"], "bullish")
 
 
 if __name__ == "__main__":

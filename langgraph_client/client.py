@@ -230,6 +230,31 @@ def _make_tools(session: ClientSession) -> list:
         result = await session.call_tool("get_recent_activities", {"limit": limit})
         return result.content[0].text if result.content else "No result."
 
+    async def get_activity_summary(start_date: str | None = None, end_date: str | None = None) -> str:
+        """Summarize activities for an optional inclusive YYYY-MM-DD date range."""
+        result = await session.call_tool("get_activity_summary", {key: value for key, value in {"start_date": start_date, "end_date": end_date}.items() if value})
+        return result.content[0].text if result.content else "No result."
+
+    async def get_sleep_summary(start_date: str | None = None, end_date: str | None = None) -> str:
+        """Summarize sleep metrics for an optional inclusive YYYY-MM-DD date range."""
+        result = await session.call_tool("get_sleep_summary", {key: value for key, value in {"start_date": start_date, "end_date": end_date}.items() if value})
+        return result.content[0].text if result.content else "No result."
+
+    async def get_workout_for_date(date: str) -> str:
+        """Get the planned workout for a YYYY-MM-DD date."""
+        result = await session.call_tool("get_workout_for_date", {"date": date})
+        return result.content[0].text if result.content else "No result."
+
+    async def get_data_freshness() -> str:
+        """Get the latest available date for every Groundhog data source."""
+        result = await session.call_tool("get_data_freshness", {})
+        return result.content[0].text if result.content else "No result."
+
+    async def get_market_summary() -> str:
+        """Get the latest market summary, including Bitcoin price and signals."""
+        result = await session.call_tool("get_market_summary", {})
+        return result.content[0].text if result.content else "No result."
+
     async def get_health_summary(date: str) -> str:
         """Get health metrics (steps, avg HR, active minutes) for a specific date (YYYY-MM-DD). Use run_sql first to find the latest available date if needed."""
         result = await session.call_tool("get_health_summary", {"date": date})
@@ -245,7 +270,8 @@ def _make_tools(session: ClientSession) -> list:
         result = await session.call_tool("recall", {"query": query, "top_k": top_k})
         return result.content[0].text if result.content else "Nothing found."
 
-    return [run_sql, get_latest_price, get_recent_activities, get_health_summary, remember, recall]
+    return [run_sql, get_latest_price, get_recent_activities, get_activity_summary, get_sleep_summary,
+            get_workout_for_date, get_data_freshness, get_market_summary, get_health_summary, remember, recall]
 
 
 async def _build_schema(session: ClientSession) -> str:
