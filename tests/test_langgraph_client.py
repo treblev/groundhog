@@ -8,7 +8,7 @@ from langgraph.types import Command
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from langgraph_client.client import DatabaseGroundingMiddleware, _make_middleware
+from langgraph_client.client import DatabaseGroundingMiddleware, InternalDetailsMiddleware, _make_middleware
 
 
 class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
@@ -22,6 +22,7 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(limits[0].exit_behavior, "continue")
         self.assertTrue(any(isinstance(item, TodoListMiddleware) for item in middleware))
         self.assertTrue(any(isinstance(item, DatabaseGroundingMiddleware) for item in middleware))
+        self.assertTrue(any(isinstance(item, InternalDetailsMiddleware) for item in middleware))
 
     async def test_grounding_guard_requests_a_corrective_retry_without_tool_result(self):
         guard = DatabaseGroundingMiddleware()
@@ -67,6 +68,45 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNone(update)
+
+    async def test_internal_details_guard_requests_a_safe_rewrite(self):
+        class UnsafeVerifier:
+            async def ainvoke(self, messages):
+                return AIMessage(content='{"safe": false, "reason": "It exposes an internal path."}')
+
+        guard = InternalDetailsMiddleware(verifier_model=UnsafeVerifier())
+        update = await guard.aafter_model(
+            {
+                "messages": [
+                    HumanMessage(content="Where is my latest activity?"),
+                    AIMessage(content="It is stored in an internal database path."),
+                ]
+            },
+            runtime=None,
+        )
+
+        self.assertIsInstance(update, Command)
+        self.assertEqual(update.goto, "model")
+        self.assertIn(guard._CORRECTION_MARKER, update.update["messages"][0].content)
+
+    async def test_internal_details_guard_declines_after_failed_rewrite(self):
+        class UnsafeVerifier:
+            async def ainvoke(self, messages):
+                return AIMessage(content='{"safe": false, "reason": "Still internal."}')
+
+        guard = InternalDetailsMiddleware(verifier_model=UnsafeVerifier())
+        update = await guard.aafter_model(
+            {
+                "messages": [
+                    HumanMessage(content="Where is my latest activity?"),
+                    HumanMessage(content=f"{guard._CORRECTION_MARKER} rewrite safely"),
+                    AIMessage(content="It is stored in an internal database path."),
+                ]
+            },
+            runtime=None,
+        )
+
+        self.assertEqual(update["messages"][0].content, guard._DECLINE_MESSAGE)
 
 
 if __name__ == "__main__":
