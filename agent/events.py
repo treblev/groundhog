@@ -13,6 +13,7 @@ EVENT_TYPES = {
     "sleep_data_imported",
     "workout_data_imported",
     "health_metric_changed",
+    "upload_imported",
 }
 
 

@@ -7,10 +7,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import argparse
 import hashlib
 import json
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from config.settings import OPENCLAW_MEDIA_INBOUND_DIR, OPENCLAW_MEDIA_STATE_PATH
+import duckdb
+
+from agent.events import event_id_for, record_event
+from agent.outbox import enqueue_event
+from config.settings import DB_PATH, OPENCLAW_MEDIA_INBOUND_DIR, OPENCLAW_MEDIA_STATE_PATH
 from ingestion.health import IMAGE_EXTS, process_image
 from ingestion.sleep import process_image as process_sleep
 from ingestion.workouts import process_image as process_workout_plan
@@ -59,6 +63,76 @@ def _next_kind(state: dict[str, dict]) -> str:
     return next_kind if next_kind in {"activity", "plan", "sleep"} else "activity"
 
 
+def _format_duration(seconds: int | None) -> str:
+    if seconds is None:
+        return "not detected"
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
+
+
+def _format_pace(seconds: int | None, unit: str) -> str:
+    if seconds is None:
+        return "not detected"
+    minutes, seconds = divmod(seconds, 60)
+    return f"{minutes}:{seconds:02d}/{unit}"
+
+
+def _confirmation_message(kind: str, records, screenshot_date: date | None = None) -> str:
+    """Build a concise, reviewable summary for one successfully imported image."""
+    if kind == "plan":
+        date_text = screenshot_date.isoformat() if screenshot_date else "unknown date"
+        return f"Imported workout plan: {records} plan(s) for {date_text}."
+
+    if kind == "sleep":
+        return (
+            f"Imported sleep data for {records.get('date', 'unknown date')}: "
+            f"resting HR {records.get('resting_hr', 'not detected')} bpm; "
+            f"HRV {records.get('hrv', 'not detected')}."
+        )
+
+    activities = records if isinstance(records, list) else []
+    summaries = []
+    for activity in activities:
+        activity_type = activity.get("activity_type", "other")
+        date_text = activity.get("date", "unknown date")
+        if activity_type == "pool swim":
+            distance = activity.get("pool_distance")
+            distance_unit = activity.get("pool_distance_unit") or "units"
+            pace = _format_pace(activity.get("swim_pace_seconds_per_100"), f"100 {activity.get('swim_pace_unit') or 'units'}")
+            distance_text = f"{distance} {distance_unit}" if distance is not None else "not detected"
+        else:
+            distance = activity.get("distance_miles")
+            distance_text = f"{distance} mi" if distance is not None else "not detected"
+            pace = _format_pace(activity.get("avg_pace_seconds_per_mile"), "mi")
+        summaries.append(
+            f"Imported activity: {activity_type} ({date_text}). Distance: {distance_text}; "
+            f"duration: {_format_duration(activity.get('duration_seconds'))}; "
+            f"avg pace: {pace}; avg HR: {activity.get('avg_hr', 'not detected')} bpm."
+        )
+    return "\n".join(summaries) or "Imported activity screenshot, but no activity details were returned."
+
+
+def _enqueue_confirmation(kind: str, upload_id: str, records, screenshot_date: date | None = None) -> None:
+    """Queue exactly one Telegram confirmation per successfully imported image."""
+    dedupe_key = f"upload_confirmation:{upload_id}"
+    message = _confirmation_message(kind, records, screenshot_date)
+    con = duckdb.connect(str(DB_PATH))
+    try:
+        record_event(
+            con,
+            event_type="upload_imported",
+            source="scripts.import_openclaw_activity_media",
+            subject_type="media_upload",
+            subject_id=upload_id,
+            payload={"kind": kind, "message": message},
+            dedupe_key=dedupe_key,
+        )
+        enqueue_event(con, event_id_for(dedupe_key))
+    finally:
+        con.close()
+
+
 def run(
     inbound_dir: Path | None,
     state_path: Path,
@@ -85,6 +159,7 @@ def run(
             continue
         kind = force_kind or _next_kind(state)
         try:
+            screenshot_date = None
             if kind == "plan":
                 screenshot_date = datetime.fromtimestamp(image_path.stat().st_mtime, PHOENIX).date()
                 records = process_workout_plan(image_path, screenshot_date)
@@ -96,6 +171,7 @@ def run(
             else:
                 records = process_image(image_path)
                 record_count = len(records)
+            _enqueue_confirmation(kind, image_id, records, screenshot_date)
         except Exception as error:
             state[image_id] = {
                 "status": "failed", "kind": kind, "path": str(image_path), "error": str(error)
