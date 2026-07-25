@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
-from unittest.mock import patch
 
 import duckdb
 
@@ -53,8 +52,7 @@ class McpServiceToolTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def _dispatch(self, name: str, args: dict) -> str:
-        with patch.object(server, "con", self.con):
-            return server._dispatch(name, args)
+        return server._dispatch(name, args, self.con)
 
     def test_read_service_tools_return_expected_data(self):
         recent_events = json.loads(self._dispatch("get_recent_events", {}))

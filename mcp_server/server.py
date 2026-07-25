@@ -18,7 +18,6 @@ from ingestion.schema import init_db
 
 server = Server("groundhog")
 init_db(DB_PATH)
-con = duckdb.connect(str(DB_PATH))
 
 
 @server.list_tools()
@@ -131,7 +130,24 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=result)]
 
 
-def _dispatch(name: str, args: dict) -> str:
+def _dispatch(
+    name: str,
+    args: dict,
+    connection: duckdb.DuckDBPyConnection | None = None,
+) -> str:
+    """Handle one MCP call without retaining a DuckDB lock between requests."""
+    owns_connection = connection is None
+    con = connection or duckdb.connect(str(DB_PATH))
+    try:
+        return _dispatch_with_connection(con, name, args)
+    finally:
+        if owns_connection:
+            con.close()
+
+
+def _dispatch_with_connection(
+    con: duckdb.DuckDBPyConnection, name: str, args: dict
+) -> str:
     if name == "run_sql":
         try:
             df = con.execute(args["query"]).fetchdf()
@@ -172,7 +188,7 @@ def _dispatch(name: str, args: dict) -> str:
         return recall(con, args["query"], args.get("top_k", 3))
 
     if name == "get_recent_events":
-        return _query_json(
+        return _query_json(con,
             """
             SELECT event_type, source, subject_type, subject_id, occurred_at, payload
             FROM events
@@ -183,7 +199,7 @@ def _dispatch(name: str, args: dict) -> str:
         )
 
     if name == "get_pending_outbox":
-        return _query_json(
+        return _query_json(con,
             """
             SELECT o.id, e.event_type, e.subject_type, e.subject_id, e.payload, o.created_at
             FROM outbox o
@@ -196,7 +212,7 @@ def _dispatch(name: str, args: dict) -> str:
         )
 
     if name == "get_agent_run_status":
-        return _query_json(
+        return _query_json(con,
             """
             SELECT job_name, status, started_at, finished_at, error_text
             FROM agent_runs
@@ -206,7 +222,7 @@ def _dispatch(name: str, args: dict) -> str:
         )
 
     if name == "get_latest_alerts":
-        return _query_json(
+        return _query_json(con,
             """
             SELECT date, ticker, alert_type, message, notified_at
             FROM stock_alerts
@@ -222,14 +238,16 @@ def _dispatch(name: str, args: dict) -> str:
         if row is None:
             return json.dumps({"error": f"No outbox item found for '{outbox_id}'."})
         set_outbox_status(con, outbox_id, "delivered")
-        return _query_json(
+        return _query_json(con,
             "SELECT id, status, delivered_at FROM outbox WHERE id = ?", [outbox_id]
         )
 
     return f"Unknown tool: {name}"
 
 
-def _query_json(query: str, parameters: list | None = None) -> str:
+def _query_json(
+    con: duckdb.DuckDBPyConnection, query: str, parameters: list | None = None
+) -> str:
     cursor = con.execute(query, parameters or [])
     columns = [column[0] for column in cursor.description]
     rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
