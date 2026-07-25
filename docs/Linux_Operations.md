@@ -151,6 +151,17 @@ them. Later images are parsed by the local vision model and upserted into the
 existing `activities` table. The checkpoint is stored outside the repository at
 `/home/openclaw/data/groundhog/openclaw_activity_media_state.json`.
 
+To arm exactly the next Telegram image as a SugarWOD workout plan instead of an
+activity result, run:
+
+```bash
+GROUNDHOG_OPENCLAW_MEDIA_STATE_PATH=/home/openclaw/data/groundhog/openclaw_activity_media_state.json \
+venv/bin/python -m scripts.import_openclaw_activity_media --next-kind plan
+```
+
+The plan importer uses the upload's Phoenix-local date and then automatically
+returns to activity-result mode.
+
 Install it as `openclaw`:
 
 ```bash

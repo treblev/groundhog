@@ -54,3 +54,25 @@ class OpenClawActivityMediaTests(unittest.TestCase):
                 self.assertEqual(watcher.run(inbound, state_path), 0)
 
             process.assert_called_once_with(image)
+
+    def test_next_plan_uses_plan_importer_once_then_returns_to_activity_importer(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            inbound = root / "inbound"
+            inbound.mkdir()
+            state_path = root / "state.json"
+            watcher.set_next_kind(state_path, "plan")
+            plan_image = inbound / "plan.jpg"
+            plan_image.write_bytes(b"plan")
+
+            with (
+                patch.object(watcher, "process_workout_plan", return_value=2) as plan,
+                patch.object(watcher, "process_image", return_value=[{"type": "activity"}]) as activity,
+            ):
+                self.assertEqual(watcher.run(inbound, state_path), 2)
+                activity_image = inbound / "activity.jpg"
+                activity_image.write_bytes(b"activity")
+                self.assertEqual(watcher.run(inbound, state_path), 1)
+
+            plan.assert_called_once()
+            activity.assert_called_once_with(activity_image)
