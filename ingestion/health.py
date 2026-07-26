@@ -190,8 +190,13 @@ def _archive_image(image_path: Path) -> Path:
     return destination
 
 
-def process_image(image_path: Path, activity_date: date | None = None) -> list[dict]:
-    """Ingest one activity-result screenshot supplied by an upload integration."""
+def process_image(image_path: Path, reference_date: date | None = None) -> list[dict]:
+    """Ingest one activity-result screenshot supplied by an upload integration.
+
+    The visible month/day is always the source of an activity's date. The
+    optional reference date is used only to choose its year when the screenshot
+    does not show one; it must never replace the visible activity date.
+    """
     if image_path.suffix.lower() not in IMAGE_EXTS:
         raise ValueError(f"Unsupported image type: {image_path.suffix or '(none)'}")
     if not image_path.is_file():
@@ -207,10 +212,8 @@ def process_image(image_path: Path, activity_date: date | None = None) -> list[d
     imported = []
     try:
         for metrics in records:
-            metrics["date"] = (
-                activity_date.isoformat()
-                if activity_date is not None
-                else _resolve_date(metrics.get("month_day"), date.today())
+            metrics["date"] = _resolve_date(
+                metrics.get("month_day"), reference_date or date.today()
             )
             if not metrics["date"]:
                 raise ValueError(f"Could not resolve date from month_day={metrics.get('month_day')!r}.")
@@ -251,12 +254,16 @@ def run() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract activity results from fitness screenshots.")
     parser.add_argument("--image", type=Path, help="A screenshot supplied by an upload integration.")
-    parser.add_argument("--date", type=date.fromisoformat, help="Optional activity date in YYYY-MM-DD format.")
+    parser.add_argument(
+        "--reference-date",
+        type=date.fromisoformat,
+        help="Optional upload/reference date used only to resolve the screenshot year.",
+    )
     args = parser.parse_args()
     if args.image is None:
         run()
         return
-    records = process_image(args.image, args.date)
+    records = process_image(args.image, args.reference_date)
     print(json.dumps(records, sort_keys=True))
 
 

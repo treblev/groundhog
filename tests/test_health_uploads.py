@@ -31,7 +31,7 @@ class HealthUploadTests(unittest.TestCase):
                 patch.object(health, "PROCESSED_DIR", processed_dir),
                 patch.object(health, "_query_ollama", return_value=response),
             ):
-                records = health.process_image(image_path, date(2026, 7, 24))
+                records = health.process_image(image_path, date(2026, 7, 30))
 
             self.assertEqual(len(records), 1)
             self.assertTrue(image_path.exists())
@@ -64,7 +64,7 @@ class HealthUploadTests(unittest.TestCase):
                 patch.object(health, "PROCESSED_DIR", temp_path / "processed"),
                 patch.object(health, "_query_ollama", return_value=response),
             ):
-                health.process_image(image_path, date(2026, 7, 24))
+                health.process_image(image_path, date(2026, 7, 30))
 
             con = duckdb.connect(str(db_path), read_only=True)
             try:
@@ -77,3 +77,20 @@ class HealthUploadTests(unittest.TestCase):
                 )
             finally:
                 con.close()
+
+    def test_visible_activity_date_overrides_upload_reference_date(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "telegram-activity.png"
+            image_path.write_bytes(b"activity screenshot")
+            db_path = temp_path / "groundhog.duckdb"
+            schema.init_db(db_path)
+            response = '[{"type":"activity","month_day":"07-18","activity_type":"running","duration_seconds":1800}]'
+            with (
+                patch.object(health, "DB_PATH", db_path),
+                patch.object(health, "PROCESSED_DIR", temp_path / "processed"),
+                patch.object(health, "_query_ollama", return_value=response),
+            ):
+                records = health.process_image(image_path, date(2026, 7, 25))
+
+            self.assertEqual(records[0]["date"], "2026-07-18")

@@ -268,7 +268,9 @@ In order (most recent last):
 - **Supertrend implementation**: verified correct against Pine Script; do not "simplify"
 - **Scheduling**: Linux systemd user timer under `openclaw`, pinned to `America/Phoenix`.
 - **AI model selection**: local Ollama only. Do not add OpenAI/Anthropic calls.
-- **Date source for sleep/workout ingestion**: date comes from filename, not from screenshot content
+- **Date source**: sleep and workout plans use upload/filename metadata as a
+  placeholder date; completed activities always use the date visible in their
+  screenshot (the upload date is only a year-resolution reference).
 
 ---
 
