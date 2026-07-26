@@ -21,9 +21,11 @@ Suggested OpenClaw behavior for direct Telegram messages:
 
 1. On a PNG, JPG, or JPEG workout-result attachment, invoke the command above.
 2. Reply with the imported activity type and visible metrics.
-3. If the screenshot date is unclear, do not import it as an activity until a
-   legible screenshot or an explicit correction workflow is available; do not
-   use the Telegram message timestamp.
+3. Put a date in the image caption when the screenshot date is unclear, for
+   example `Easy run — 7/18`. Groundhog accepts `M/D`, `MM-DD`, or
+   `YYYY-MM-DD`; short dates are resolved to the most recent occurrence based
+   on the upload date. The caption fills only a missing or unreadable screenshot
+   date. A visible screenshot date always wins.
 4. If extraction fails, leave the attachment untouched and report the error.
 
 The command does not move or delete OpenClaw's media-cache file.

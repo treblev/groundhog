@@ -94,3 +94,26 @@ class HealthUploadTests(unittest.TestCase):
                 records = health.process_image(image_path, date(2026, 7, 25))
 
             self.assertEqual(records[0]["date"], "2026-07-18")
+
+    def test_date_hint_fills_an_unreadable_screenshot_date(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "telegram-activity.png"
+            image_path.write_bytes(b"activity screenshot")
+            db_path = temp_path / "groundhog.duckdb"
+            schema.init_db(db_path)
+            response = '[{"type":"activity","month_day":null,"activity_type":"running","duration_seconds":1800}]'
+            with (
+                patch.object(health, "DB_PATH", db_path),
+                patch.object(health, "PROCESSED_DIR", temp_path / "processed"),
+                patch.object(health, "_query_ollama", return_value=response),
+            ):
+                records = health.process_image(image_path, date(2026, 7, 25), "7/18")
+
+            self.assertEqual(records[0]["date"], "2026-07-18")
+
+    def test_date_hint_rolls_back_to_last_occurrence_when_needed(self):
+        self.assertEqual(
+            health._resolve_date_hint("12/30", date(2026, 1, 3)),
+            "2025-12-30",
+        )

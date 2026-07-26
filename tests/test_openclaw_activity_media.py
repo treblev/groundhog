@@ -122,6 +122,35 @@ class OpenClawActivityMediaTests(unittest.TestCase):
             state = watcher._load_state(state_path)
             self.assertEqual(next(iter(state.values()))["kind"], "sleep")
 
+    def test_caption_date_is_passed_to_the_direct_activity_importer(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            inbound = root / "inbound"
+            inbound.mkdir()
+            state_path = root / "state.json"
+            image = inbound / "run.jpg"
+            image.write_bytes(b"run")
+
+            with (
+                patch.object(watcher, "process_image", return_value=[{"type": "activity"}]) as process,
+                patch.object(watcher, "_enqueue_confirmation"),
+            ):
+                records = watcher.import_captioned_activity(image, "Easy run — 7/18", state_path)
+
+            _, reference_date, date_hint = process.call_args.args
+            self.assertEqual(date_hint, "7/18")
+            self.assertIsNotNone(reference_date)
+            self.assertEqual(records, [{"type": "activity"}])
+            state = watcher._load_state(state_path)
+            record = state[watcher._file_id(image)]
+            self.assertEqual(record["caption_date_hint"], "7/18")
+
+    def test_caption_ignores_invalid_date_tokens(self):
+        self.assertIsNone(watcher._date_hint_from_caption("ran on 2/30"))
+
+    def test_caption_prefers_an_iso_date(self):
+        self.assertEqual(watcher._date_hint_from_caption("date: 2025-07-18"), "2025-07-18")
+
     def test_activity_confirmation_includes_reviewable_metrics(self):
         message = watcher._confirmation_message(
             "activity",

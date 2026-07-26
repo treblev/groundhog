@@ -63,6 +63,27 @@ def _next_kind(state: dict[str, dict]) -> str:
     return next_kind if next_kind in {"activity", "plan", "sleep"} else "activity"
 
 
+def _date_hint_from_caption(caption: str | None) -> str | None:
+    """Return a valid date token from an attachment caption, if one is present."""
+    if not caption:
+        return None
+    import re
+
+    tokens = re.findall(r"(?<!\d)(?:\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2})(?!\d)", caption)
+    for token in tokens:
+        try:
+            date.fromisoformat(token)
+            return token
+        except ValueError:
+            try:
+                month, day = (int(part) for part in re.split(r"[/-]", token))
+                date(2000, month, day)
+                return token
+            except ValueError:
+                continue
+    return None
+
+
 def _format_duration(seconds: int | None) -> str:
     if seconds is None:
         return "not detected"
@@ -133,6 +154,28 @@ def _enqueue_confirmation(kind: str, upload_id: str, records, screenshot_date: d
         con.close()
 
 
+def import_captioned_activity(image_path: Path, caption: str | None, state_path: Path) -> list[dict]:
+    """Import one Telegram activity attachment using its caption as optional metadata."""
+    upload_id = _file_id(image_path)
+    state = _load_state(state_path)
+    if upload_id in state:
+        return []
+
+    reference_date = datetime.fromtimestamp(image_path.stat().st_mtime, PHOENIX).date()
+    date_hint = _date_hint_from_caption(caption)
+    records = process_image(image_path, reference_date, date_hint)
+    _enqueue_confirmation("activity", upload_id, records)
+    state[upload_id] = {
+        "status": "imported",
+        "kind": "activity",
+        "path": str(image_path),
+        "records": len(records),
+        **({"caption_date_hint": date_hint} if date_hint else {}),
+    }
+    _write_state(state_path, state)
+    return records
+
+
 def run(
     inbound_dir: Path | None,
     state_path: Path,
@@ -179,7 +222,7 @@ def run(
             print(f"Failed {image_path.name}: {error}")
         else:
             state[image_id] = {
-                "status": "imported", "kind": kind, "path": str(image_path), "records": record_count
+                "status": "imported", "kind": kind, "path": str(image_path), "records": record_count,
             }
             imported += record_count
             print(f"Imported {record_count} {kind} record(s) from {image_path.name}.")
@@ -191,6 +234,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Import new OpenClaw activity screenshots.")
     parser.add_argument("--initialize", action="store_true", help="Record current images without importing them.")
     parser.add_argument("--next-kind", choices=["activity", "plan", "sleep"], help="Use this type for exactly the next image.")
+    parser.add_argument("--image", type=Path, help="A direct Telegram activity attachment path.")
+    parser.add_argument("--caption", help="Caption text supplied with --image.")
     parser.add_argument(
         "--all-new-kind",
         choices=["activity", "plan", "sleep"],
@@ -199,6 +244,10 @@ def main() -> None:
     parser.add_argument("--inbound-dir", type=Path, default=OPENCLAW_MEDIA_INBOUND_DIR)
     parser.add_argument("--state-path", type=Path, default=OPENCLAW_MEDIA_STATE_PATH)
     args = parser.parse_args()
+    if args.image:
+        records = import_captioned_activity(args.image, args.caption, args.state_path)
+        print(json.dumps(records, sort_keys=True))
+        return
     if args.next_kind:
         set_next_kind(args.state_path, args.next_kind)
         print(f"Next OpenClaw image will be imported as a {args.next_kind}.")

@@ -111,6 +111,21 @@ def _resolve_date(month_day: str, today: date) -> Optional[str]:
     return candidate.isoformat()
 
 
+def _resolve_date_hint(date_hint: str, reference_date: date) -> Optional[str]:
+    """Resolve a user-supplied YYYY-MM-DD or MM-DD activity-date hint."""
+    if not isinstance(date_hint, str):
+        return None
+    value = date_hint.strip()
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        pass
+    match = re.fullmatch(r"(\d{1,2})[/-](\d{1,2})", value)
+    if not match:
+        return None
+    return _resolve_date(f"{int(match.group(1)):02d}-{int(match.group(2)):02d}", reference_date)
+
+
 def _activity_id(date: str, activity_type: str, duration_seconds: Optional[int]) -> str:
     key = f"{date}|{activity_type}|{duration_seconds}"
     return hashlib.sha256(key.encode()).hexdigest()[:16]
@@ -190,12 +205,17 @@ def _archive_image(image_path: Path) -> Path:
     return destination
 
 
-def process_image(image_path: Path, reference_date: date | None = None) -> list[dict]:
+def process_image(
+    image_path: Path,
+    reference_date: date | None = None,
+    date_hint: str | None = None,
+) -> list[dict]:
     """Ingest one activity-result screenshot supplied by an upload integration.
 
     The visible month/day is always the source of an activity's date. The
     optional reference date is used only to choose its year when the screenshot
-    does not show one; it must never replace the visible activity date.
+    does not show one. A user-provided date hint fills an unreadable or missing
+    screenshot date, but never replaces a visible one.
     """
     if image_path.suffix.lower() not in IMAGE_EXTS:
         raise ValueError(f"Unsupported image type: {image_path.suffix or '(none)'}")
@@ -212,9 +232,10 @@ def process_image(image_path: Path, reference_date: date | None = None) -> list[
     imported = []
     try:
         for metrics in records:
-            metrics["date"] = _resolve_date(
-                metrics.get("month_day"), reference_date or date.today()
-            )
+            resolved_reference_date = reference_date or date.today()
+            metrics["date"] = _resolve_date(metrics.get("month_day"), resolved_reference_date)
+            if not metrics["date"] and date_hint:
+                metrics["date"] = _resolve_date_hint(date_hint, resolved_reference_date)
             if not metrics["date"]:
                 raise ValueError(f"Could not resolve date from month_day={metrics.get('month_day')!r}.")
             record_type = metrics.get("type")
@@ -259,11 +280,15 @@ def main() -> None:
         type=date.fromisoformat,
         help="Optional upload/reference date used only to resolve the screenshot year.",
     )
+    parser.add_argument(
+        "--date-hint",
+        help="User-supplied YYYY-MM-DD or MM-DD date used only when the screenshot date is missing.",
+    )
     args = parser.parse_args()
     if args.image is None:
         run()
         return
-    records = process_image(args.image, args.reference_date)
+    records = process_image(args.image, args.reference_date, args.date_hint)
     print(json.dumps(records, sort_keys=True))
 
 
