@@ -101,6 +101,19 @@ class RunTrackingTests(unittest.TestCase):
         self.assertIsNotNone(row[2])
         self.assertIsNone(row[3])
 
+    def test_weekend_crypto_job_fetches_only_bitcoin(self):
+        with (
+            patch.object(groundhog_service, "DB_PATH", self.db_path),
+            patch.object(groundhog_service.stocks, "run") as fetch,
+            patch.object(groundhog_service.signals, "run") as signals,
+            patch.object(groundhog_service.alerts, "run") as alerts,
+        ):
+            groundhog_service.run_weekend_crypto_prices()
+
+        fetch.assert_called_once_with(tickers={"BTC-USD"})
+        signals.assert_not_called()
+        alerts.assert_not_called()
+
     def test_status_command_reports_latest_run_and_pending_outbox(self):
         con = self._connection()
         try:
@@ -132,7 +145,10 @@ class RunTrackingTests(unittest.TestCase):
         self.assertEqual(groundhog_service.due_tasks(monday_after_close, ran_yesterday), ["daily-stocks"])
         self.assertEqual(groundhog_service.due_tasks(monday_after_close, ran_today), [])
         self.assertEqual(groundhog_service.due_tasks(monday_morning, None), [])
-        self.assertEqual(groundhog_service.due_tasks(sunday_after_close, None), [])
+        self.assertEqual(
+            groundhog_service.due_tasks(sunday_after_close, None),
+            ["weekend-crypto-prices"],
+        )
 
 
 if __name__ == "__main__":

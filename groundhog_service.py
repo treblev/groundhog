@@ -22,10 +22,13 @@ from ingestion import stocks
 from ingestion.schema import init_db
 
 DAILY_STOCKS_JOB = "daily_stocks"
+WEEKEND_CRYPTO_JOB = "weekend_crypto_prices"
 PHOENIX = ZoneInfo("America/Phoenix")
 
 
-def _finish_run(run_id: str, status: str, error_text: str | None = None) -> None:
+def _finish_run(
+    run_id: str, job_name: str, status: str, error_text: str | None = None
+) -> None:
     con = duckdb.connect(str(DB_PATH))
     try:
         con.execute("BEGIN")
@@ -38,7 +41,7 @@ def _finish_run(run_id: str, status: str, error_text: str | None = None) -> None
             subject_type="agent_run",
             subject_id=run_id,
             payload={
-                "job_name": DAILY_STOCKS_JOB,
+                "job_name": job_name,
                 "status": status,
                 "error_text": error_text,
             },
@@ -70,10 +73,30 @@ def run_daily_stocks() -> None:
         alerts.run()
     except Exception:
         error_text = traceback.format_exc()
-        _finish_run(run_id, "failed", error_text)
+        _finish_run(run_id, DAILY_STOCKS_JOB, "failed", error_text)
         raise
     else:
-        _finish_run(run_id, "succeeded")
+        _finish_run(run_id, DAILY_STOCKS_JOB, "succeeded")
+
+
+def run_weekend_crypto_prices() -> None:
+    """Fetch the weekend BTC-USD price without rerunning equities or alerts."""
+    init_db(DB_PATH)
+    con = duckdb.connect(str(DB_PATH))
+    try:
+        run_id = start_run(con, WEEKEND_CRYPTO_JOB)
+    finally:
+        con.close()
+
+    try:
+        print("--- Fetching weekend BTC-USD price ---")
+        stocks.run(tickers={"BTC-USD"})
+    except Exception:
+        error_text = traceback.format_exc()
+        _finish_run(run_id, WEEKEND_CRYPTO_JOB, "failed", error_text)
+        raise
+    else:
+        _finish_run(run_id, WEEKEND_CRYPTO_JOB, "succeeded")
 
 
 def get_status() -> dict:
@@ -115,23 +138,31 @@ def get_status() -> dict:
     }
 
 
-def due_tasks(now: datetime, last_daily_stocks_run: datetime | None) -> list[str]:
+def due_tasks(
+    now: datetime,
+    last_daily_stocks_run: datetime | None,
+    last_weekend_crypto_run: datetime | None = None,
+) -> list[str]:
     """Return scheduled tasks due at a Phoenix-local time."""
     if now.tzinfo is None:
         raise ValueError("now must include a timezone.")
     local_now = now.astimezone(PHOENIX)
-    if last_daily_stocks_run is not None and last_daily_stocks_run.tzinfo is None:
-        last_daily_stocks_run = last_daily_stocks_run.replace(tzinfo=PHOENIX)
-    has_run_today = (
-        last_daily_stocks_run is not None
-        and last_daily_stocks_run.astimezone(PHOENIX).date() == local_now.date()
-    )
-    if local_now.weekday() < 5 and local_now.hour >= 17 and not has_run_today:
-        return ["daily-stocks"]
-    return []
+    def ran_today(last_run: datetime | None) -> bool:
+        if last_run is None:
+            return False
+        if last_run.tzinfo is None:
+            last_run = last_run.replace(tzinfo=PHOENIX)
+        return last_run.astimezone(PHOENIX).date() == local_now.date()
+
+    due = []
+    if local_now.weekday() < 5 and local_now.hour >= 17 and not ran_today(last_daily_stocks_run):
+        due.append("daily-stocks")
+    if local_now.weekday() >= 5 and local_now.hour >= 17 and not ran_today(last_weekend_crypto_run):
+        due.append("weekend-crypto-prices")
+    return due
 
 
-def _last_daily_stocks_run() -> datetime | None:
+def _last_run(job_name: str) -> datetime | None:
     con = duckdb.connect(str(DB_PATH), read_only=True)
     try:
         row = con.execute(
@@ -140,7 +171,7 @@ def _last_daily_stocks_run() -> datetime | None:
             FROM agent_runs
             WHERE job_name = ?
             """,
-            [DAILY_STOCKS_JOB],
+            [job_name],
         ).fetchone()
         return row[0] if row and row[0] else None
     finally:
@@ -164,9 +195,15 @@ def run_daemon(poll_seconds: int = 60) -> None:
     print(f"Groundhog daemon started; polling every {poll_seconds} seconds.")
     try:
         while not stop_event.is_set():
-            for task in due_tasks(datetime.now(PHOENIX), _last_daily_stocks_run()):
+            for task in due_tasks(
+                datetime.now(PHOENIX),
+                _last_run(DAILY_STOCKS_JOB),
+                _last_run(WEEKEND_CRYPTO_JOB),
+            ):
                 if task == "daily-stocks":
                     run_daily_stocks()
+                elif task == "weekend-crypto-prices":
+                    run_weekend_crypto_prices()
             stop_event.wait(poll_seconds)
     finally:
         signal.signal(signal.SIGTERM, previous_term)
@@ -177,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run and inspect Groundhog service tasks.")
     commands = parser.add_subparsers(dest="command", required=True)
     run_parser = commands.add_parser("run", help="Run a scheduled Groundhog task.")
-    run_parser.add_argument("job", choices=["daily-stocks"])
+    run_parser.add_argument("job", choices=["daily-stocks", "weekend-crypto-prices"])
     commands.add_parser("status", help="Print the latest service status as JSON.")
     daemon_parser = commands.add_parser("daemon", help="Poll for and run due Groundhog tasks.")
     daemon_parser.add_argument("--poll-seconds", type=int, default=60)
@@ -187,7 +224,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "run":
-        run_daily_stocks()
+        if args.job == "daily-stocks":
+            run_daily_stocks()
+        else:
+            run_weekend_crypto_prices()
         return 0
 
     if args.command == "daemon":

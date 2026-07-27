@@ -26,6 +26,17 @@ venv/bin/python tests/smoke_test.py
 
 ## Stock Jobs
 
+Equities run at 5 PM Phoenix time on weekdays. A separate `groundhog-crypto`
+timer runs at the same time on Saturday and Sunday and fetches only `BTC-USD`;
+it does not rerun equities, signals, or alerts. Install it as `openclaw`:
+
+```bash
+cp deploy/systemd/user/groundhog-crypto.service ~/.config/systemd/user/
+cp deploy/systemd/user/groundhog-crypto.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now groundhog-crypto.timer
+```
+
 The stock pipeline should run as the `openclaw` user:
 
 ```bash

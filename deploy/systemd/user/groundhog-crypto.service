@@ -1,0 +1,9 @@
+[Unit]
+Description=Groundhog weekend BTC-USD price ingestion
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/openclaw/apps/groundhog
+Environment=TZ=America/Phoenix
+Environment=GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb
+ExecStart=/home/openclaw/apps/groundhog/venv/bin/python /home/openclaw/apps/groundhog/groundhog_service.py run weekend-crypto-prices

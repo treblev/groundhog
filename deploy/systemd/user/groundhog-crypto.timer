@@ -1,0 +1,10 @@
+[Unit]
+Description=Fetch Groundhog BTC-USD price on weekends
+
+[Timer]
+OnCalendar=Sat,Sun *-*-* 17:00:00 America/Phoenix
+Persistent=true
+Unit=groundhog-crypto.service
+
+[Install]
+WantedBy=timers.target

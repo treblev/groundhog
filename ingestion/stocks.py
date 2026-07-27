@@ -79,10 +79,12 @@ def _bulk_insert(con: duckdb.DuckDBPyConnection, rows: list) -> int:
     return after - before
 
 
-def run() -> None:
+def run(tickers: set[str] | None = None) -> None:
     watchlist = load_watchlist()
+    if tickers is not None:
+        watchlist = [(ticker, period) for ticker, period in watchlist if ticker in tickers]
     if not watchlist:
-        print("Watchlist is empty.")
+        print("No matching watchlist tickers.")
         return
 
     con = duckdb.connect(str(DB_PATH))

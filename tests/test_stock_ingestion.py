@@ -118,6 +118,19 @@ class StockIngestionTests(unittest.TestCase):
 
         fetch.assert_called_once_with("TEST", "2y", date(2026, 7, 20))
 
+    def test_run_can_limit_ingestion_to_specific_tickers(self):
+        con = duckdb.connect(":memory:")
+        _stock_table(con)
+        with (
+            patch.object(stocks, "load_watchlist", return_value=[("AAPL", "2y"), ("BTC-USD", "max")]),
+            patch.object(stocks.duckdb, "connect", return_value=con),
+            patch.object(stocks, "_fetch_history", return_value=[]) as fetch,
+            patch("builtins.print"),
+        ):
+            stocks.run(tickers={"BTC-USD"})
+
+        fetch.assert_called_once_with("BTC-USD", "max", None)
+
     def test_empty_yahoo_response_returns_no_rows(self):
         with patch.object(stocks.yf, "Ticker") as ticker_class:
             ticker_class.return_value.history.return_value = pd.DataFrame()
