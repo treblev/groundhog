@@ -1,6 +1,7 @@
 import sys
 import unittest
 from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -92,6 +93,38 @@ class StockIngestionTests(unittest.TestCase):
             self.assertEqual(stocks._bulk_insert(con, rows), 2)
             self.assertEqual(stocks._bulk_insert(con, rows), 0)
             self.assertEqual(stocks._latest_date(con, "TEST"), date(2026, 7, 21))
+        finally:
+            con.close()
+
+    def test_fetch_latest_intraday_price_uses_the_last_bar(self):
+        intraday = _price_frame(pd.date_range("2026-07-26 12:00", periods=2, freq="min"))
+        intraday.loc[intraday.index[1], "Close"] = 102.5
+        with (
+            patch.object(stocks, "date", FrozenDate),
+            patch.object(stocks.yf, "Ticker") as ticker_class,
+        ):
+            ticker_class.return_value.history.return_value = intraday
+            row = stocks.fetch_latest_intraday_price("BTC-USD")
+
+        ticker_class.return_value.history.assert_called_once_with(period="1d", interval="1m")
+        self.assertEqual(row[0], FrozenDate.today())
+        self.assertEqual(row[1], "BTC-USD")
+        self.assertEqual(row[5], 102.5)
+
+    def test_upsert_current_price_refreshes_existing_row(self):
+        con = duckdb.connect(":memory:")
+        try:
+            _stock_table(con)
+            stocks.upsert_current_price(
+                con, (date(2026, 7, 26), "BTC-USD", 100, 101, 99, 100, 1)
+            )
+            stocks.upsert_current_price(
+                con, (date(2026, 7, 26), "BTC-USD", 100, 103, 99, 102, 2)
+            )
+            self.assertEqual(
+                con.execute("SELECT closing_price, volume FROM stock_watchlist").fetchone(),
+                (Decimal("102.00"), 2),
+            )
         finally:
             con.close()
 

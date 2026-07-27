@@ -104,13 +104,18 @@ class RunTrackingTests(unittest.TestCase):
     def test_weekend_crypto_job_fetches_only_bitcoin(self):
         with (
             patch.object(groundhog_service, "DB_PATH", self.db_path),
-            patch.object(groundhog_service.stocks, "run") as fetch,
+            patch.object(
+                groundhog_service.stocks,
+                "fetch_latest_intraday_price",
+                return_value=(datetime(2026, 7, 26).date(), "BTC-USD", 100, 101, 99, 100, 1),
+            ),
+            patch.object(groundhog_service.stocks, "upsert_current_price") as upsert,
             patch.object(groundhog_service.signals, "run") as signals,
             patch.object(groundhog_service.alerts, "run") as alerts,
         ):
             groundhog_service.run_weekend_crypto_prices()
 
-        fetch.assert_called_once_with(tickers={"BTC-USD"})
+        upsert.assert_called_once()
         signals.assert_not_called()
         alerts.assert_not_called()
 

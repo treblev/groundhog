@@ -61,6 +61,35 @@ def _latest_date(con: duckdb.DuckDBPyConnection, ticker: str) -> date | None:
     return row[0] if row and row[0] is not None else None
 
 
+def fetch_latest_intraday_price(ticker: str) -> tuple | None:
+    """Return a current-day OHLCV snapshot from the latest intraday bar."""
+    data = yf.Ticker(ticker).history(period="1d", interval="1m")
+    if data.empty:
+        return None
+    data = data.dropna(subset=["Close"])
+    if data.empty:
+        return None
+    latest = data.iloc[-1]
+    volume = data["Volume"].sum()
+
+    def _safe(val):
+        f = float(val)
+        return None if math.isnan(f) else f
+
+    close = _safe(latest["Close"])
+    if close is None:
+        return None
+    return (
+        date.today(),
+        ticker,
+        _safe(data["Open"].iloc[0]),
+        _safe(data["High"].max()),
+        _safe(data["Low"].min()),
+        close,
+        int(volume) if not math.isnan(float(volume)) else None,
+    )
+
+
 def _bulk_insert(con: duckdb.DuckDBPyConnection, rows: list) -> int:
     if not rows:
         return 0
@@ -77,6 +106,23 @@ def _bulk_insert(con: duckdb.DuckDBPyConnection, rows: list) -> int:
         )
     after = con.execute("SELECT COUNT(*) FROM stock_watchlist WHERE ticker = ?", [ticker]).fetchone()[0]
     return after - before
+
+
+def upsert_current_price(con: duckdb.DuckDBPyConnection, row: tuple) -> None:
+    """Store one current-day market snapshot, refreshing it on repeated runs."""
+    con.execute(
+        """
+        INSERT INTO stock_watchlist (date, ticker, open, high, low, closing_price, volume)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (date, ticker) DO UPDATE SET
+            open = excluded.open,
+            high = excluded.high,
+            low = excluded.low,
+            closing_price = excluded.closing_price,
+            volume = excluded.volume
+        """,
+        row,
+    )
 
 
 def run(tickers: set[str] | None = None) -> None:

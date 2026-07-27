@@ -90,7 +90,17 @@ def run_weekend_crypto_prices() -> None:
 
     try:
         print("--- Fetching weekend BTC-USD price ---")
-        stocks.run(tickers={"BTC-USD"})
+        quote = stocks.fetch_latest_intraday_price("BTC-USD")
+        if quote is None:
+            print("No intraday BTC-USD quote returned; falling back to daily history.")
+            stocks.run(tickers={"BTC-USD"})
+        else:
+            con = duckdb.connect(str(DB_PATH))
+            try:
+                stocks.upsert_current_price(con, quote)
+            finally:
+                con.close()
+            print(f"Stored BTC-USD price for {quote[0]}.")
     except Exception:
         error_text = traceback.format_exc()
         _finish_run(run_id, WEEKEND_CRYPTO_JOB, "failed", error_text)
