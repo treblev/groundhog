@@ -1,3 +1,7 @@
 # Groundhog — TODO
 
+- Add event-sourced operational visibility for the agent: emit structured, ordered lifecycle, model, tool, error, and completion events so runs can be inspected, measured, and debugged without parsing log text.
+
 - `notebooks/vision_prompt_evals.ipynb` currently imports `PROMPT` straight from `ingestion/health.py`, so it always tests whatever prompt is actually live in production — good for catching drift, but it means you can't tweak prompt wording inside the notebook and eyeball results before committing to `health.py` (the old pre-rewrite notebook supported that via an editable in-notebook `PROMPT` variable). If that experimentation workflow turns out to be wanted, add an optional local override variable in the notebook that defaults to the imported `PROMPT` but can be redefined per-cell for trial wording, without changing what `score` actually tests once you're done.
+
+- monitor data quality of scheduled runs. 
