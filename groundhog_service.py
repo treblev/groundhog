@@ -5,6 +5,7 @@ import signal
 import sys
 import traceback
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 from threading import Event
 from zoneinfo import ZoneInfo
@@ -24,6 +25,72 @@ from ingestion.schema import init_db
 DAILY_STOCKS_JOB = "daily_stocks"
 WEEKEND_CRYPTO_JOB = "weekend_crypto_prices"
 PHOENIX = ZoneInfo("America/Phoenix")
+
+
+def _json_default(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
+
+
+def query_data(sql: str, max_rows: int = 100) -> dict:
+    """Run one read-only DuckDB query and return JSON-ready rows."""
+    if max_rows < 1:
+        raise ValueError("max_rows must be at least 1.")
+    statement = sql.strip()
+    if not statement:
+        raise ValueError("SQL query cannot be empty.")
+    if not statement.upper().startswith(("SELECT", "WITH", "EXPLAIN")):
+        raise ValueError("Only read-only SELECT, WITH, and EXPLAIN queries are allowed.")
+
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        result = con.execute(statement)
+        columns = [column[0] for column in result.description]
+        rows = result.fetchmany(max_rows + 1)
+    finally:
+        con.close()
+
+    truncated = len(rows) > max_rows
+    rows = rows[:max_rows]
+    return {
+        "columns": columns,
+        "rows": [dict(zip(columns, row)) for row in rows],
+        "truncated": truncated,
+    }
+
+
+def inspect_schema(table: str | None = None) -> list[dict]:
+    """Return table and column metadata for building Groundhog data queries."""
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        if table:
+            rows = con.execute(
+                """
+                SELECT table_name, column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'main' AND table_name = ?
+                ORDER BY ordinal_position
+                """,
+                [table],
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """
+                SELECT table_name, column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'main'
+                ORDER BY table_name, ordinal_position
+                """
+            ).fetchall()
+    finally:
+        con.close()
+    return [
+        {"table": row[0], "column": row[1], "type": row[2]}
+        for row in rows
+    ]
 
 
 def _finish_run(
@@ -226,6 +293,11 @@ def main(argv: list[str] | None = None) -> int:
     run_parser = commands.add_parser("run", help="Run a scheduled Groundhog task.")
     run_parser.add_argument("job", choices=["daily-stocks", "weekend-crypto-prices"])
     commands.add_parser("status", help="Print the latest service status as JSON.")
+    query_parser = commands.add_parser("query", help="Run one read-only SQL query and print JSON.")
+    query_parser.add_argument("--sql", required=True, help="A SELECT, WITH, or EXPLAIN query.")
+    query_parser.add_argument("--max-rows", type=int, default=100, help="Maximum returned rows (default: 100).")
+    schema_parser = commands.add_parser("schema", help="Print table and column metadata as JSON.")
+    schema_parser.add_argument("--table", help="Optional table name to inspect.")
     daemon_parser = commands.add_parser("daemon", help="Poll for and run due Groundhog tasks.")
     daemon_parser.add_argument("--poll-seconds", type=int, default=60)
     summary_parser = commands.add_parser("summarize", help="Generate a local derived summary.")
@@ -259,7 +331,20 @@ def main(argv: list[str] | None = None) -> int:
         print(content)
         return 0
 
-    print(json.dumps(get_status(), default=str, sort_keys=True))
+    if args.command == "query":
+        try:
+            result = query_data(args.sql, args.max_rows)
+        except (duckdb.Error, ValueError) as error:
+            print(json.dumps({"error": str(error)}), file=sys.stderr)
+            return 2
+        print(json.dumps(result, default=_json_default, sort_keys=True))
+        return 0
+
+    if args.command == "schema":
+        print(json.dumps(inspect_schema(args.table), sort_keys=True))
+        return 0
+
+    print(json.dumps(get_status(), default=_json_default, sort_keys=True))
     return 0
 
 

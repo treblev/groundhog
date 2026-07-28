@@ -139,6 +139,47 @@ class RunTrackingTests(unittest.TestCase):
         self.assertEqual(result["latest_run"]["status"], "succeeded")
         self.assertEqual(result["pending_outbox_count"], 0)
 
+    def test_query_command_returns_structured_read_only_results(self):
+        output = io.StringIO()
+        with (
+            patch.object(groundhog_service, "DB_PATH", self.db_path),
+            contextlib.redirect_stdout(output),
+        ):
+            exit_code = groundhog_service.main(
+                ["query", "--sql", "SELECT 42 AS answer"]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            json.loads(output.getvalue()),
+            {"columns": ["answer"], "rows": [{"answer": 42}], "truncated": False},
+        )
+
+    def test_query_command_rejects_write_statements(self):
+        errors = io.StringIO()
+        with (
+            patch.object(groundhog_service, "DB_PATH", self.db_path),
+            contextlib.redirect_stderr(errors),
+        ):
+            exit_code = groundhog_service.main(
+                ["query", "--sql", "DELETE FROM activities"]
+            )
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("Only read-only", errors.getvalue())
+
+    def test_schema_command_can_inspect_one_table(self):
+        output = io.StringIO()
+        with (
+            patch.object(groundhog_service, "DB_PATH", self.db_path),
+            contextlib.redirect_stdout(output),
+        ):
+            exit_code = groundhog_service.main(["schema", "--table", "activities"])
+
+        columns = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(any(column["column"] == "activity_type" for column in columns))
+
     def test_due_tasks_runs_weekday_once_after_market_close(self):
         monday_after_close = datetime(2026, 7, 20, 17, 0, tzinfo=groundhog_service.PHOENIX)
         monday_morning = datetime(2026, 7, 20, 9, 0, tzinfo=groundhog_service.PHOENIX)
