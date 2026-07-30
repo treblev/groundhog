@@ -193,49 +193,39 @@ GROUNDHOG_OPENCLAW_MEDIA_STATE_PATH=/home/openclaw/data/groundhog/openclaw_activ
 venv/bin/python -m scripts.import_openclaw_activity_media --initialize
 ```
 
-## systemd User Timer
+## OpenClaw Stock Schedule
 
-Install the user service and timer as `openclaw`:
+OpenClaw is the production scheduler for weekday stock jobs. The deployed job
+is `groundhog-daily-stocks`; it runs exactly at 5:00 PM in
+`America/Phoenix` on Monday through Friday, with no stagger. It invokes the
+same `groundhog_service.py run daily-stocks` command as the manual entrypoint.
+
+Useful checks and a manual trigger:
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp deploy/systemd/user/groundhog-stocks.service ~/.config/systemd/user/
-cp deploy/systemd/user/groundhog-stocks.timer ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now groundhog-stocks.timer
+openclaw cron show groundhog-daily-stocks --json
+openclaw cron runs
+openclaw cron run 9ca75bbb-6e16-45db-a2eb-473bc13547ce --wait --wait-timeout 30m
 ```
 
-The timer is pinned to `America/Phoenix` in the unit file, independent of the
-host's system timezone.
-
-Useful checks:
+The former `groundhog-stocks.timer` systemd timer is disabled to prevent a
+duplicate 5 PM run. Keep its service installed only as a manual fallback:
 
 ```bash
-systemctl --user status groundhog-stocks.timer
-systemctl --user list-timers groundhog-stocks.timer
-journalctl --user -u groundhog-stocks.service -n 100 --no-pager
 systemctl --user start groundhog-stocks.service
 ```
 
-Linger is already enabled for `openclaw`, so the timer can run without an
-active login session.
-
-The deployed Linux timer has completed successfully through
-`groundhog-stocks.service`. That verifies the default timer path. It does not
-verify optional daemon restart or reboot behavior; keep those checks separate if
-daemon mode is enabled later.
-
 ## Optional Daemon Mode
 
-The existing timer is the default deployment. Daemon mode is for a continuous
+OpenClaw cron is the default deployment. Daemon mode is for a continuous
 Groundhog process that polls for due tasks and runs `daily-stocks` once per
 Phoenix business day after 5pm. Do not enable both modes: near 5pm they can
 race to start the same job.
 
-To switch from the timer to daemon mode as `openclaw`:
+To switch from OpenClaw cron to daemon mode as `openclaw`:
 
 ```bash
-systemctl --user disable --now groundhog-stocks.timer
+openclaw cron disable 9ca75bbb-6e16-45db-a2eb-473bc13547ce
 cp deploy/systemd/user/groundhog-daemon.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now groundhog-daemon.service

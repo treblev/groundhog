@@ -76,7 +76,7 @@ No linter configured.
 |----------|--------|--------|
 | Database | DuckDB | Analytical queries, local file, no server |
 | AI runtime | Ollama (local) | Personal data must not leave the machine |
-| Scheduling | systemd user timer | Runs under the `openclaw` service user; linger is enabled |
+| Scheduling | OpenClaw cron | Runs as `openclaw`; daily stocks run at 5pm America/Phoenix on weekdays |
 | Supertrend bands | Manual pandas | pandas-ta fails on Python 3.14 (numba won't build) |
 | SMA | `ta` library | Same reason — pandas-ta broken |
 | Weekly signals | Resample daily OHLCV with `resample("W-FRI")` | Don't fetch weekly bars from yfinance |
@@ -105,7 +105,7 @@ No linter configured.
 - `config/settings.py` — single source of truth for all paths/models
 - `config/watchlist.txt` custom periods — `INTC 7y`, `BTC-USD max`, `MSFT 10y`, `V 10y`, `NET 7y`, `SNOW 5y`
 - Supertrend implementation in `analytics/signals.py` — verified correct against Pine Script
-- Scheduling mechanism — systemd user timer under `openclaw`, `TZ=America/Phoenix`, 5pm MST
+- Scheduling mechanism — OpenClaw cron under `openclaw`, `America/Phoenix`, 5pm weekdays
 
 ---
 

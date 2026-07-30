@@ -24,7 +24,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 - **Ingestion**: yfinance (stocks), fitness activity screenshots via vision LLM → `activities`, SugarWOD plan screenshots via vision LLM → `workouts`, and Sleep8 screenshots → `sleep_metrics`
 - **Analytics**: SMA50/200 crossover, Supertrend (daily + weekly) → `stock_signals` → `stock_alerts`
 - **Agent**: MCP tool server (stdio JSON-RPC) + LangGraph client (`create_agent()`), replacing the hand-rolled loop
-- **Scheduling**: Linux systemd user timer under `openclaw`
+- **Scheduling**: OpenClaw cron under `openclaw` (daily stocks: 5 PM America/Phoenix, weekdays)
 - **AI**: Ollama local only. `qwen3.6:latest` for SQL/text, `qwen3-vl:latest` for vision, `nomic-embed-text` for memory embeddings. No external API calls with personal data.
 
 ---
@@ -48,15 +48,15 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 | `scripts/ask_groundhog.py` | One-question CLI used by Telegram `/ask`; prints only the guarded agent answer. |
 | `deploy/openclaw/skills/groundhog-ask/SKILL.md` | OpenClaw skill that routes Telegram `/ask` messages to `scripts.ask_groundhog`. |
 | `groundhog_service.py` | Service CLI: `run daily-stocks` and `status` |
-| `scripts/daily_stocks.sh` | systemd compatibility entrypoint to `groundhog_service.py run daily-stocks` |
+| `scripts/daily_stocks.sh` | Manual compatibility entrypoint to `groundhog_service.py run daily-stocks` |
 | `scripts/openclaw_deliver_outbox.py` | OpenClaw-side delivery bridge: Groundhog MCP outbox → OpenClaw Telegram → mark delivered on success. |
 | `scripts/import_openclaw_activity_media.py` | Deterministic OpenClaw media watcher. Checkpoints old files, imports each new attachment once, and has one-shot `--next-kind plan` routing. |
 | `scripts/update_watchlist.py` | Scrapes Nasdaq-100 from Wikipedia, merges into watchlist.txt. |
-| `deploy/systemd/user/groundhog-stocks.service` | systemd user service for the daily stock pipeline. |
-| `deploy/systemd/user/groundhog-stocks.timer` | systemd user timer, runs 5pm America/Phoenix on weekdays. |
+| `deploy/systemd/user/groundhog-stocks.service` | systemd user service retained as a manual fallback for the daily stock pipeline. |
+| `deploy/systemd/user/groundhog-stocks.timer` | Legacy systemd timer; disabled in production because OpenClaw cron owns the weekday 5pm Phoenix schedule. |
 | `deploy/systemd/user/groundhog-daemon.service` | Optional always-on daemon service; do not enable alongside the timer. |
 | `deploy/systemd/user/groundhog-openclaw-media.{service,timer}` | One-minute OpenClaw inbound-media watcher for Telegram screenshots. |
-| `docs/Linux_Operations.md` | Linux host runbook for stock jobs and the systemd user timer. |
+| `docs/Linux_Operations.md` | Linux host runbook for stock jobs and the OpenClaw schedule. |
 
 ---
 
@@ -81,7 +81,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 
 - **Local AI only**: Ollama, never OpenAI/Anthropic API for personal data
 - **DuckDB not SQLite**: chosen for analytical query performance
-- **systemd user timers on Linux**: `openclaw` has linger enabled, so timers run without an active login
+- **OpenClaw cron on Linux**: the Gateway owns the weekday stock schedule; the legacy systemd stock timer is disabled to prevent duplicate runs
 - **Date from filename, not screenshot**: screenshot OCR for dates is unreliable (workouts + sleep)
 - **`ta` library for SMA, manual pandas for Supertrend**: `pandas-ta` fails on Python 3.14 (numba won't build)
 - **Weekly Supertrend**: resample daily OHLCV to weekly with `resample("W-FRI")` — do not fetch weekly bars from yfinance
@@ -266,7 +266,7 @@ In order (most recent last):
 - **`config/settings.py`**: single source of truth; no hardcoded paths anywhere else
 - **`config/watchlist.txt`**: custom periods (`INTC 7y`, `BTC-USD max`, `MSFT 10y`, `V 10y`, `NET 7y`, `SNOW 5y`) must be preserved across any watchlist updates
 - **Supertrend implementation**: verified correct against Pine Script; do not "simplify"
-- **Scheduling**: Linux systemd user timer under `openclaw`, pinned to `America/Phoenix`.
+- **Scheduling**: OpenClaw cron under `openclaw`, pinned to `America/Phoenix`.
 - **AI model selection**: local Ollama only. Do not add OpenAI/Anthropic calls.
 - **Date source**: sleep and workout plans use upload/filename metadata as a
   placeholder date; completed activities always use the date visible in their
