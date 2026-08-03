@@ -11,11 +11,8 @@ from config.settings import OLLAMA_BASE_URL, OLLAMA_EMBEDDINGS_URL
 
 class MemoryEmbeddingTests(unittest.TestCase):
     def test_config_carries_mac_ollama_base_url(self):
-        self.assertEqual(OLLAMA_BASE_URL, "http://192.168.1.13:11434")
-        self.assertEqual(
-            OLLAMA_EMBEDDINGS_URL,
-            "http://192.168.1.13:11434/api/embeddings",
-        )
+        self.assertTrue(OLLAMA_BASE_URL.startswith("http://"))
+        self.assertEqual(OLLAMA_EMBEDDINGS_URL, f"{OLLAMA_BASE_URL}/api/embeddings")
 
     @patch("agent.memory.httpx.post")
     def test_embed_posts_to_configured_ollama_embeddings_url(self, post):
@@ -25,7 +22,7 @@ class MemoryEmbeddingTests(unittest.TestCase):
         self.assertEqual(memory._embed("test"), [0.1, 0.2])
 
         post.assert_called_once_with(
-            "http://192.168.1.13:11434/api/embeddings",
+            OLLAMA_EMBEDDINGS_URL,
             json={"model": "nomic-embed-text", "prompt": "test"},
             timeout=30.0,
         )

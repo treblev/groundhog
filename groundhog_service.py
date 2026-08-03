@@ -18,7 +18,8 @@ from agent.events import record_event
 from agent.runs import finish_run, start_run
 from agent.summaries import generate_daily_summary, generate_weekly_review, prioritize_pending_outbox
 from analytics import alerts, signals
-from config.settings import DB_PATH
+from config.settings import DB_PATH, REQUEST_TRACE_DIR
+from langgraph_client.request_tracing import read_events
 from ingestion import stocks
 from ingestion.schema import init_db
 
@@ -215,6 +216,41 @@ def get_status() -> dict:
     }
 
 
+def list_request_traces(limit: int = 20, status: str | None = None) -> list[dict]:
+    """Return compact metadata for locally recorded agent request traces."""
+    if limit < 1:
+        raise ValueError("limit must be at least 1.")
+    grouped: dict[str, list[dict]] = {}
+    for event in read_events(REQUEST_TRACE_DIR):
+        trace_id = event.get("trace_id")
+        if isinstance(trace_id, str):
+            grouped.setdefault(trace_id, []).append(event)
+    traces = []
+    for trace_id, events in grouped.items():
+        events.sort(key=lambda event: event.get("sequence", 0))
+        first, last = events[0], events[-1]
+        outcome = last.get("outcome")
+        if status and outcome != status:
+            continue
+        traces.append({
+            "trace_id": trace_id,
+            "started_at": first.get("timestamp"),
+            "outcome": outcome,
+            "event_count": len(events),
+            "duration_ms": last.get("duration_ms"),
+            "question": first.get("payload", {}).get("question") if isinstance(first.get("payload"), dict) else None,
+        })
+    return sorted(traces, key=lambda trace: trace.get("started_at") or "", reverse=True)[:limit]
+
+
+def show_request_trace(trace_id: str) -> list[dict]:
+    """Return every event for one trace in recorded sequence order."""
+    events = [event for event in read_events(REQUEST_TRACE_DIR) if event.get("trace_id") == trace_id]
+    if not events:
+        raise ValueError(f"Unknown trace ID: {trace_id}")
+    return sorted(events, key=lambda event: event.get("sequence", 0))
+
+
 def due_tasks(
     now: datetime,
     last_daily_stocks_run: datetime | None,
@@ -303,6 +339,13 @@ def main(argv: list[str] | None = None) -> int:
     summary_parser = commands.add_parser("summarize", help="Generate a local derived summary.")
     summary_parser.add_argument("kind", choices=["daily", "weekly"])
     summary_parser.add_argument("--date", required=True, type=date.fromisoformat)
+    traces_parser = commands.add_parser("traces", help="Inspect local agent request traces.")
+    trace_commands = traces_parser.add_subparsers(dest="traces_command", required=True)
+    trace_list_parser = trace_commands.add_parser("list", help="List recent request traces as JSON.")
+    trace_list_parser.add_argument("--limit", type=int, default=20)
+    trace_list_parser.add_argument("--status", choices=["succeeded", "failed", "rejected"])
+    trace_show_parser = trace_commands.add_parser("show", help="Show all events for one trace as JSON.")
+    trace_show_parser.add_argument("trace_id")
     args = parser.parse_args(argv)
 
     if args.command == "run":
@@ -342,6 +385,19 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "schema":
         print(json.dumps(inspect_schema(args.table), sort_keys=True))
+        return 0
+
+    if args.command == "traces":
+        try:
+            result = (
+                list_request_traces(args.limit, args.status)
+                if args.traces_command == "list"
+                else show_request_trace(args.trace_id)
+            )
+        except ValueError as error:
+            print(json.dumps({"error": str(error)}), file=sys.stderr)
+            return 2
+        print(json.dumps(result, default=_json_default, sort_keys=True))
         return 0
 
     print(json.dumps(get_status(), default=_json_default, sort_keys=True))

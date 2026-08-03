@@ -22,9 +22,13 @@ OPENCLAW_MEDIA_STATE_PATH = Path(
         BASE_DIR / "data" / "openclaw_activity_media_state.json",
     )
 )
+REQUEST_TRACE_DIR = Path(
+    os.environ.get("GROUNDHOG_REQUEST_TRACE_DIR", BASE_DIR / "data" / "logs" / "request-traces")
+)
+REQUEST_TRACE_RETENTION_DAYS = 30
 OLLAMA_VISION_MODEL = "qwen3-vl:latest"
 OLLAMA_SQL_MODEL = "qwen3.6:latest"
-OLLAMA_BASE_URL = "http://192.168.1.13:11434"
+OLLAMA_BASE_URL = os.environ.get("GROUNDHOG_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OLLAMA_CHAT_URL = f"{OLLAMA_BASE_URL}/api/chat"
 OLLAMA_EMBEDDINGS_URL = f"{OLLAMA_BASE_URL}/api/embeddings"
 

@@ -27,6 +27,15 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 - **Scheduling**: OpenClaw cron under `openclaw` (daily stocks: 5 PM America/Phoenix, weekdays)
 - **AI**: Ollama local only. `qwen3.6:latest` for SQL/text, `qwen3-vl:latest` for vision, `nomic-embed-text` for memory embeddings. No external API calls with personal data.
 
+### Local request traces
+
+Each LangGraph agent request is appended locally as ordered JSONL events: the question, model traffic, MCP/tool arguments and results, guard decisions, final answer, and failures. Traces remain in `data/logs/request-traces/` (or `GROUNDHOG_REQUEST_TRACE_DIR`) for 30 days. They can contain sensitive personal data and remain gitignored/local-only.
+
+```bash
+python groundhog_service.py traces list --limit 20
+python groundhog_service.py traces show TRACE_ID
+```
+
 ---
 
 ## 3. Important Files and What They Do
@@ -165,7 +174,7 @@ The systemd timer is pinned to `America/Phoenix`.
 Ollama base URL is configured in `config/settings.py`:
 
 ```python
-OLLAMA_BASE_URL = "http://192.168.1.13:11434"
+GROUNDHOG_OLLAMA_BASE_URL=http://YOUR-MAC.local:11434
 ```
 
 ---

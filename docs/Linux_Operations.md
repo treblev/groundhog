@@ -15,7 +15,7 @@ Current Linux deployment assumptions:
 
 When Groundhog runs on Linux but Ollama runs on the Mac, the Mac Ollama base URL
 is configured explicitly in `config/settings.py` as
-`OLLAMA_BASE_URL=http://192.168.1.13:11434`.
+`GROUNDHOG_OLLAMA_BASE_URL=http://YOUR-MAC.local:11434` in the local `.env`.
 
 Verify from Linux:
 
