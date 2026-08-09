@@ -19,6 +19,7 @@ import httpx
 from PIL import Image, ImageOps
 
 from config.settings import DB_PATH, DROP_FOLDER, OLLAMA_CHAT_URL, OLLAMA_VISION_MODEL
+from ingestion.schema import init_db
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 PROCESSED_DIR = DROP_FOLDER / "spending" / "processed"
@@ -192,6 +193,7 @@ def process_image(image_path: Path, reference_date: date | None = None) -> list[
     if not transactions:
         raise ValueError("Could not extract any dated transactions from the Apple Wallet screenshot.")
 
+    init_db(DB_PATH)
     con = duckdb.connect(str(DB_PATH))
     try:
         existing = con.execute("SELECT COUNT(*) FROM spending WHERE source_image_hash = ?", [image_hash]).fetchone()[0]
