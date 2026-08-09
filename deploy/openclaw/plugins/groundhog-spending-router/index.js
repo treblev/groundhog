@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
@@ -27,6 +27,30 @@ function findMediaPath(value, mediaRoot) {
     }
   }
   return undefined;
+}
+
+function findRecentMediaPath(mediaRoot, timestamp) {
+  const target = typeof timestamp === "number"
+    ? (timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp)
+    : Date.now();
+  const candidates = [];
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = `${directory}/${entry.name}`;
+      if (entry.isDirectory()) visit(path);
+      else if (/\.(?:png|jpe?g)$/i.test(entry.name)) {
+        const modifiedAt = statSync(path).mtimeMs;
+        if (Math.abs(modifiedAt - target) <= 5 * 60 * 1000) candidates.push({ path, modifiedAt });
+      }
+    }
+  };
+  try {
+    visit(mediaRoot);
+  } catch {
+    return undefined;
+  }
+  candidates.sort((left, right) => Math.abs(left.modifiedAt - target) - Math.abs(right.modifiedAt - target));
+  return candidates[0]?.path;
 }
 
 function run(python, appDir, args) {
@@ -64,7 +88,7 @@ export default definePluginEntry({
 
     api.registerHook("inbound_claim", async (event) => {
       if (event.channel !== "telegram" || !/(?:^|\s)\/expense\b/i.test(event.content ?? event.body ?? "")) return;
-      const imagePath = findMediaPath(event, mediaRoot);
+      const imagePath = findMediaPath(event, mediaRoot) ?? findRecentMediaPath(mediaRoot, event.timestamp);
       if (!imagePath) return;
       const referenceDate = new Date(event.timestamp ?? Date.now()).toLocaleDateString("en-CA", { timeZone: "America/Phoenix" });
       if (!DATE.test(referenceDate)) return { handled: true, reply: { text: "Could not determine the upload date for this Wallet screenshot." } };
