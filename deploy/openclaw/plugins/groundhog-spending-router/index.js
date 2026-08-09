@@ -44,21 +44,53 @@ function run(python, appDir, args) {
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("error", rejectRun);
-    child.on("close", (code) => code === 0 ? resolveRun(stdout.trim()) : rejectRun(new Error(stderr.trim() || `Groundhog exited ${code}`)));
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolveRun(stdout.trim());
+        return;
+      }
+      const details = stderr.trim();
+      const lastLine = details.split(/\r?\n/).filter(Boolean).at(-1) ?? `Groundhog exited ${code}`;
+      const error = new Error(lastLine.replace(/^[A-Za-z_][\w.]*Error:\s*/, ""));
+      error.details = details;
+      rejectRun(error);
+    });
   });
 }
 
-function formatImport(rows) {
-  if (rows.length === 0) return "That Wallet screenshot was already imported.";
+function countLabel(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function formatImport(result) {
+  const rows = Array.isArray(result) ? result : (result.transactions ?? []);
+  const pending = Number(result.skipped_pending ?? 0);
+  const duplicates = Number(result.skipped_duplicates ?? 0);
+  const invalid = Number(result.skipped_invalid ?? 0);
+  const skipped = [];
+  if (pending) skipped.push(countLabel(pending, "pending charge"));
+  if (duplicates) skipped.push(countLabel(duplicates, "existing duplicate"));
+  if (invalid) skipped.push(countLabel(invalid, "invalid row"));
+  if (rows.length === 0) {
+    if (pending && !duplicates && !invalid) {
+      return `No posted transactions imported; skipped ${countLabel(pending, "pending charge")}.`;
+    }
+    if (duplicates && !pending && !invalid) {
+      return `No new transactions; skipped ${countLabel(duplicates, "existing duplicate")}.`;
+    }
+    if (skipped.length) return `No new transactions imported; skipped ${skipped.join(", ")}.`;
+    return "Could not identify any supported transactions with a merchant, amount, and date.";
+  }
   const total = rows.reduce((sum, row) => sum + Number(row.amount), 0).toFixed(2);
   const lines = rows.map((row) => `${row.id.slice(0, 8)} — ${row.merchant}: $${Number(row.amount).toFixed(2)} (${row.category})`);
-  return `Imported ${rows.length} spending transaction${rows.length === 1 ? "" : "s"} — $${total}\n${lines.join("\n")}`;
+  const skippedText = skipped.length ? `\nSkipped ${skipped.join(", ")}.` : "";
+  return `Imported ${rows.length} spending transaction${rows.length === 1 ? "" : "s"} — $${total}\n${lines.join("\n")}${skippedText}`;
 }
 
 export default definePluginEntry({
   id: "groundhog-spending-router",
   name: "Groundhog spending router",
-  description: "Deterministic Apple Wallet screenshot import and category corrections.",
+  description: "Deterministic Wallet and bank transaction screenshot import and category corrections.",
   register(api) {
     const config = api.pluginConfig ?? {};
     const appDir = textFrom(config.appDir) || "/home/openclaw/apps/groundhog";
@@ -68,28 +100,28 @@ export default definePluginEntry({
 
     api.registerCommand({
       name: "expense",
-      description: "Import an attached Apple Wallet transaction screenshot.",
+      description: "Import an attached Wallet or bank transaction screenshot.",
       acceptsArgs: false,
       channels: ["telegram"],
       handler: async () => {
         const startedAt = Date.now();
         const imagePath = findRecentMediaPath(mediaRoot, startedAt);
         if (!imagePath) {
-          return { text: "No recent screenshot was found. Attach the Wallet screenshot and use /expense as its caption." };
+          return { text: "No recent screenshot was found. Attach the transaction screenshot and use /expense as its caption." };
         }
         const referenceDate = new Date(startedAt).toLocaleDateString("en-CA", { timeZone: "America/Phoenix" });
-        if (!DATE.test(referenceDate)) return { text: "Could not determine the upload date for this Wallet screenshot." };
+        if (!DATE.test(referenceDate)) return { text: "Could not determine the upload date for this transaction screenshot." };
         try {
           const output = await run(python, appDir, [
             "import", "--image", imagePath, "--reference-date", referenceDate,
             "--media-state-path", mediaStatePath,
           ]);
-          const rows = JSON.parse(output);
-          api.logger.info(`Groundhog spending import completed: rows=${rows.length} durationMs=${Date.now() - startedAt}`);
-          return { text: formatImport(rows) };
+          const result = JSON.parse(output);
+          api.logger.info(`Groundhog spending import completed: rows=${result.transactions?.length ?? 0} pending=${result.skipped_pending ?? 0} duplicates=${result.skipped_duplicates ?? 0} invalid=${result.skipped_invalid ?? 0} durationMs=${Date.now() - startedAt}`);
+          return { text: formatImport(result) };
         } catch (error) {
-          api.logger.error(`Groundhog spending import failed: ${error.message}`);
-          return { text: `Wallet import failed: ${error.message}` };
+          api.logger.error(`Groundhog spending import failed: ${error.details || error.message}`);
+          return { text: `Expense import failed: ${error.message}` };
         }
       },
     });
