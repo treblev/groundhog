@@ -187,7 +187,7 @@ as an activity, and replies with imported transactions and their short IDs.
 Correct a category later with:
 
 ```text
-/expense category <transaction-id> <groceries|dining|shopping|entertainment|beer|other>
+/expense-category <transaction-id> <groceries|dining|shopping|entertainment|beer|other>
 ```
 
 The importer resolves Wallet's relative date labels from the upload timestamp

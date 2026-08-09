@@ -81,17 +81,17 @@ export default definePluginEntry({
     }, { name: "groundhog-spending-router.inbound-claim" });
 
     api.registerCommand({
-      name: "expense",
-      description: "Correct an expense category: /expense category <transaction-id> <category>",
+      name: "expense-category",
+      description: "Correct an expense category: /expense-category <transaction-id> <category>",
       acceptsArgs: true,
       channels: ["telegram"],
       handler: async (ctx) => {
         const tokens = (ctx.args ?? "").trim().split(/\s+/);
-        if (tokens.length !== 3 || tokens[0].toLowerCase() !== "category") {
-          return { text: "Usage: /expense category <transaction-id> <groceries|dining|shopping|entertainment|beer|other>" };
+        if (tokens.length !== 2) {
+          return { text: "Usage: /expense-category <transaction-id> <groceries|dining|shopping|entertainment|beer|other>" };
         }
         try {
-          const output = await run(python, appDir, ["category", tokens[1], tokens[2]]);
+          const output = await run(python, appDir, ["category", tokens[0], tokens[1]]);
           const row = JSON.parse(output);
           return { text: `Updated ${row.id.slice(0, 8)} — ${row.merchant} ($${row.amount}) to ${row.category}.` };
         } catch (error) {
