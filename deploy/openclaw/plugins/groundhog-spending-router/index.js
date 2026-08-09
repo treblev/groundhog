@@ -63,7 +63,7 @@ export default definePluginEntry({
     const config = api.pluginConfig ?? {};
     const appDir = textFrom(config.appDir) || "/home/openclaw/apps/groundhog";
     const python = textFrom(config.python) || `${appDir}/venv/bin/python`;
-    const mediaRoot = resolve(textFrom(config.mediaRoot) || "/home/openclaw/media/inbound");
+    const mediaRoot = resolve(textFrom(config.mediaRoot) || "/home/openclaw/.openclaw/media/inbound");
     const mediaStatePath = textFrom(config.mediaStatePath) || "/home/openclaw/data/groundhog/openclaw_activity_media_state.json";
 
     api.registerCommand({
