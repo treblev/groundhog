@@ -24,6 +24,7 @@ from ingestion.schema import init_db
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 PROCESSED_DIR = DROP_FOLDER / "spending" / "processed"
 CATEGORIES = {"groceries", "dining", "shopping", "entertainment", "beer", "other"}
+MERCHANT_CATEGORY_OVERRIDES = {"circlek": "beer"}
 MAX_IMAGE_DIMENSION = 1200
 WEEKDAYS = {
     "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
@@ -127,6 +128,15 @@ def _amount(value) -> Decimal | None:
         return None
 
 
+def _category_for(merchant: str, suggested_category) -> str:
+    normalized_merchant = re.sub(r"[^a-z0-9]", "", merchant.lower())
+    for merchant_prefix, category in MERCHANT_CATEGORY_OVERRIDES.items():
+        if normalized_merchant.startswith(merchant_prefix):
+            return category
+    category = str(suggested_category or "other").strip().lower()
+    return category if category in CATEGORIES else "other"
+
+
 def _normalize(rows: list[dict], reference_date: date) -> list[dict]:
     transactions = []
     for row in rows:
@@ -137,14 +147,14 @@ def _normalize(rows: list[dict], reference_date: date) -> list[dict]:
         amount = _amount(row.get("amount"))
         if transaction_date is None or amount is None:
             continue
-        category = str(row.get("category") or "other").strip().lower()
+        merchant = merchant.strip()
         transactions.append({
-            "merchant": merchant.strip(),
+            "merchant": merchant,
             "amount": amount,
             "transaction_date": transaction_date,
             "visible_date_label": row.get("visible_date_label"),
             "payment_method": row.get("payment_method"),
-            "category": category if category in CATEGORIES else "other",
+            "category": _category_for(merchant, row.get("category")),
         })
     return transactions
 

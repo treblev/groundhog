@@ -47,6 +47,14 @@ class SpendingIngestionTests(unittest.TestCase):
         self.assertEqual(rows[0]["amount"], Decimal("4.46"))
         self.assertEqual(rows[1]["category"], "other")
 
+    def test_circle_k_category_overrides_vision_category(self):
+        rows = spending._normalize([
+            {"merchant": "Circlek #2703490", "amount": "$8.87", "visible_date_label": "Today", "category": "shopping"},
+            {"merchant": "Circle K Store 123", "amount": "$2.83", "visible_date_label": "Today", "category": "other"},
+        ], date(2026, 8, 9))
+
+        self.assertEqual([row["category"] for row in rows], ["beer", "beer"])
+
     def test_process_image_is_idempotent_and_archives_source(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
