@@ -78,7 +78,7 @@ export default definePluginEntry({
         api.logger.error(`Groundhog spending import failed: ${error.message}`);
         return { handled: true, reply: { text: `Wallet import failed: ${error.message}` } };
       }
-    });
+    }, { name: "groundhog-spending-router.inbound-claim" });
 
     api.registerCommand({
       name: "expense",
