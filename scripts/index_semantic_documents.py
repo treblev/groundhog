@@ -7,12 +7,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import argparse
 import json
 
+from agent.memory import sync_memory_embeddings
 from agent.semantic_search import DOMAIN_WORKOUT, sync_workout_embeddings
+
+DOMAIN_MEMORY = "memory"
+DOMAIN_ALL = "all"
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--domain", choices=[DOMAIN_WORKOUT], default=DOMAIN_WORKOUT)
+    parser.add_argument(
+        "--domain",
+        choices=[DOMAIN_WORKOUT, DOMAIN_MEMORY, DOMAIN_ALL],
+        default=DOMAIN_WORKOUT,
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -20,8 +28,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if args.domain == DOMAIN_WORKOUT:
-        print(json.dumps(sync_workout_embeddings(dry_run=args.dry_run), sort_keys=True))
+    results = {}
+    if args.domain in {DOMAIN_WORKOUT, DOMAIN_ALL}:
+        results[DOMAIN_WORKOUT] = sync_workout_embeddings(dry_run=args.dry_run)
+    if args.domain in {DOMAIN_MEMORY, DOMAIN_ALL}:
+        results[DOMAIN_MEMORY] = sync_memory_embeddings(dry_run=args.dry_run)
+    output = results[args.domain] if args.domain != DOMAIN_ALL else results
+    print(json.dumps(output, sort_keys=True))
     return 0
 
 

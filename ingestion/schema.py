@@ -140,9 +140,11 @@ def init_db(db_path: Path | str | None = None):
             id VARCHAR PRIMARY KEY,
             fact TEXT,
             embedding FLOAT[],
+            embedding_model VARCHAR,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    con.execute("ALTER TABLE memory ADD COLUMN IF NOT EXISTS embedding_model VARCHAR")
 
     con.execute("""
         CREATE TABLE IF NOT EXISTS semantic_chunks (
