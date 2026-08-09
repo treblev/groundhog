@@ -6,7 +6,7 @@
 
 **Groundhog** is a personal data pipeline and local AI agent. It ingests health, sleep, workout, spending, and stock market data into a single local DuckDB database, runs technical analysis signals, fires alerts on trading signals, and answers natural-language questions about the data via an LLM agent.
 
-**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Production on Linux tracks the `main` branch under the `openclaw` service user. Telegram activity, workout, sleep, and spending screenshots are imported deterministically; Telegram text questions use `/ask <question>` to invoke the guarded LangGraph agent. `/expense` bypasses chat-model routing and invokes Groundhog's local spending importer directly. The agent has mutable todos, a 12-tool-call limit, database-grounding retries, and an internal-details disclosure guard. Dedicated tools cover activity and sleep summaries, workout lookup, data freshness, and a market summary that includes Bitcoin. OpenClaw handles chat, commands, scheduling, and delivery; Groundhog remains the local data and analytics layer.
+**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Production on Linux tracks the `main` branch under the `openclaw` service user. Telegram activity, workout, sleep, and spending screenshots are imported deterministically; Telegram text questions use `/ask <question>` to invoke the guarded LangGraph agent. `/expense` bypasses chat-model routing and invokes Groundhog's local spending importer directly. The agent has mutable todos, a 12-tool-call limit, database-grounding retries, and an internal-details disclosure guard. Dedicated tools cover activity and sleep summaries, exact-date workout lookup, local semantic workout-plan search, data freshness, and a market summary that includes Bitcoin. OpenClaw handles chat, commands, scheduling, and delivery; Groundhog remains the local data and analytics layer.
 
 ---
 
@@ -19,11 +19,16 @@ Telegram /expense → OpenClaw plugin       mcp_server/ (stdio tools)
                                               ↓
                                   langgraph_client/ (active agent)
                                   mcp_client/ (legacy reference)
+
+workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ semantic_chunks
+                                  ↑                              ↓
+                         index script / search refresh ← search_documents
 ```
 
 - **Ingestion**: yfinance (stocks), fitness activity screenshots via vision LLM → `activities`, SugarWOD plan screenshots → `workouts`, Sleep8 screenshots → `sleep_metrics`, and Wallet/bank transaction-list screenshots → `spending`
 - **Analytics**: SMA50/200 crossover, Supertrend (daily + weekly) → `stock_signals` → `stock_alerts`
 - **Agent**: MCP tool server (stdio JSON-RPC) + LangGraph client (`create_agent()`), replacing the hand-rolled loop
+- **Semantic retrieval**: `search_documents` indexes and ranks stored workout plans locally. It is required for a non-date workout lookup; exact-date retrieval stays on `get_workout_for_date` and structured counts/aggregates stay on `run_sql`.
 - **Direct commands**: OpenClaw's `groundhog-spending-router` handles `/expense` and `/expense-category` before agent dispatch; it calls `ingestion.spending` directly
 - **Scheduling**: OpenClaw cron under `openclaw` (daily stocks: 5 PM America/Phoenix, weekdays)
 - **AI**: Ollama local only. `qwen3.6:latest` for SQL/text, `qwen3-vl:latest` for vision, `qwen3-embedding:0.6b` for memory and semantic-search embeddings. No external API calls with personal data.
@@ -40,6 +45,8 @@ Telegram /expense → OpenClaw plugin       mcp_server/ (stdio tools)
 | `ingestion/stocks.py` | yfinance OHLCV fetch → DuckDB upsert. NaN→None via `_safe()`. |
 | `ingestion/sleep.py` | Drops sleep screenshots → vision LLM → sleep_metrics upsert. Date from filename. |
 | `ingestion/workouts.py` | Drops SugarWOD screenshots → vision LLM → workouts upsert. Hash-based dedup ID. |
+| `agent/embeddings.py` | Validates and sends batches to Ollama's configured `/api/embed` endpoint. |
+| `agent/semantic_search.py` | Builds versioned workout chunks, refreshes their derived vectors idempotently, and ranks semantic search results in DuckDB. |
 | `ingestion/health.py` | Activity-result screenshot importer. Supports a direct `--image` path for OpenClaw attachments and writes to `activities`. |
 | `ingestion/spending.py` | Local vision importer for Wallet and bank transaction lists. Resolves dates, filters pending rows, classifies, deduplicates, archives, and writes to `spending`. |
 | `analytics/signals.py` | SMA50/200 + Supertrend (daily+weekly). Uses `ta` lib for SMA, manual pandas for Supertrend. |
@@ -55,6 +62,7 @@ Telegram /expense → OpenClaw plugin       mcp_server/ (stdio tools)
 | `scripts/openclaw_deliver_outbox.py` | OpenClaw-side delivery bridge: Groundhog MCP outbox → OpenClaw Telegram → mark delivered on success. |
 | `scripts/import_openclaw_activity_media.py` | Deterministic OpenClaw media watcher. Checkpoints old files, imports each new attachment once, and has one-shot `--next-kind plan` routing. |
 | `scripts/update_watchlist.py` | Scrapes Nasdaq-100 from Wikipedia, merges into watchlist.txt. |
+| `scripts/index_semantic_documents.py` | Manual/dry-run refresh entry point for local workout and memory embeddings. |
 | `deploy/systemd/user/groundhog-stocks.service` | systemd user service retained as a manual fallback for the daily stock pipeline. |
 | `deploy/systemd/user/groundhog-stocks.timer` | Legacy systemd timer; disabled in production because OpenClaw cron owns the weekday 5pm Phoenix schedule. |
 | `deploy/systemd/user/groundhog-daemon.service` | Optional always-on daemon service; do not enable alongside the timer. |
@@ -90,6 +98,8 @@ Telegram /expense → OpenClaw plugin       mcp_server/ (stdio tools)
 - **`ta` library for SMA, manual pandas for Supertrend**: `pandas-ta` fails on Python 3.14 (numba won't build)
 - **Weekly Supertrend**: resample daily OHLCV to weekly with `resample("W-FRI")` — do not fetch weekly bars from yfinance
 - **Hash-based workout IDs**: `SHA256(date|name|description[:50])[:16]` for safe re-runs
+- **Workout semantic index is derived, local, and versioned**: index one whole-plan chunk plus recognized Fitness, Performance, HYROX, Tread, Row, and Floor sections. Store source metadata, content hashes, model name, and vectors in `semantic_chunks`; refresh changed/model-mismatched chunks and delete stale chunks. `workouts` remains the source of truth.
+- **Semantic retrieval is for unstructured workout intent only**: `search_documents` embeds a query locally, uses DuckDB cosine similarity, and returns the best matching chunk per workout. Do not use it for exact-date workout retrieval, aggregates, or stocks.
 - **Telegram screenshots are deterministic**: do not rely on the OpenClaw chat model to interpret an image. `groundhog-openclaw-media.timer` scans `/home/openclaw/media/inbound` once per minute and calls the local `qwen3-vl:latest` importer.
 - **Spending uses a registered command, not model routing**: `/expense` is owned by the OpenClaw spending plugin and directly invokes `python -m ingestion.spending`. This prevents generic chat responses and repeated tool-selection attempts.
 - **Spending dates come from the transaction row**: explicit bank dates are parsed directly; relative Wallet labels are resolved against the Phoenix-local upload date.
@@ -132,6 +142,12 @@ python ingestion/stocks.py          # fetch OHLCV for all watchlist tickers
 python ingestion/sleep.py           # process sleep screenshots from data/drop/sleep8/
 python ingestion/workouts.py        # process workout screenshots from data/drop/workouts/
 python -m ingestion.spending import --image <path> --reference-date YYYY-MM-DD
+
+# Build/inspect the derived local embedding index. Search refreshes workout
+# chunks automatically, so this is primarily useful after a bulk import or for checks.
+python scripts/index_semantic_documents.py
+python scripts/index_semantic_documents.py --domain all
+python scripts/index_semantic_documents.py --dry-run
 
 # Analytics
 python analytics/signals.py         # compute SMA + Supertrend signals
@@ -198,7 +214,9 @@ stock_alerts         -- id, date, ticker, alert_type, message, notified_at
 sleep_metrics        -- date, resting_hr, hrv, breath_rate,
                      --   time_to_fall_asleep_minutes (nullable), deep_sleep_minutes (nullable)
 workouts             -- id, date, day_of_week, name, category, structure_type, description
-semantic_chunks      -- generic local embedding index; workout day + section chunks in v1
+semantic_chunks      -- derived local vector index: id, domain, source_id, source_date,
+                     -- chunk_kind/index, section_label, title, content, metadata,
+                     -- content_hash, embedding_model, embedding, timestamps
 reminders            -- SCD Type 2: valid_from, valid_to, is_current
 activities           -- Garmin activity summary (legacy)
 spending             -- id, transaction_date, visible_date_label, merchant, amount,
@@ -240,6 +258,8 @@ No external APIs receive personal data. No API keys needed.
 12. **Vision LLM is slow**: `qwen3-vl:latest` can take 14+ minutes for complex screenshots. Workouts ingestion only processes daily screenshots, not weekly calendar views.
 13. **Transaction screenshots may show two amounts**: bank rows often show the charge plus a smaller running balance. Only the charge belongs in `spending`.
 14. **Pending transactions are not imported**: a row explicitly labeled pending is skipped. Posted rows need a merchant, charge amount, and resolvable date.
+15. **Semantic chunks are not user data to edit directly**: they are rebuildable derived copies of workout text. Use `scripts/index_semantic_documents.py` to refresh them; do not treat them as the canonical workout record.
+16. **Embedding model changes trigger reindexing**: `sync_workout_embeddings()` only reuses a chunk when both its content hash and `embedding_model` match `OLLAMA_EMBEDDING_MODEL`. All compared vectors therefore come from one model/dimension.
 
 ---
 
@@ -275,6 +295,7 @@ In order (most recent last):
 - Added deterministic `/expense` and `/expense-category` commands through the OpenClaw spending plugin
 - Added Wallet and bank transaction-list vision ingestion, the `spending` table, pending-row filtering, date parsing, image and cross-screenshot deduplication, and source-image archiving
 - Added fixed merchant categorization so Circle K spending is always classified as `beer`
+- Added local workout semantic search: Ollama embeddings, idempotent DuckDB chunk index, semantic MCP tool, query filters, and LangGraph guidance requiring it for non-date workout requests
 
 ---
 

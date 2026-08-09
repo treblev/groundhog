@@ -1,7 +1,38 @@
 # Groundhog MCP Service Tools
 
 OpenClaw connects to the `groundhog` stdio MCP server. Groundhog exposes local
-facts and state; OpenClaw chooses the user-facing wording and delivery channel.
+facts, derived retrieval results, and state; OpenClaw chooses the user-facing
+wording and delivery channel.
+
+## Semantic Workout Retrieval Architecture
+
+`search_documents` is the read-only semantic retrieval boundary for stored
+workout plans. It has one supported domain in v1: `workout`.
+
+```text
+workouts (authoritative rows)
+  → whole-plan + recognized section chunks
+  → local Ollama /api/embed batches
+  → semantic_chunks (derived DuckDB rows)
+  → query embedding + DuckDB list_cosine_similarity
+  → one best chunk per workout, ranked evidence returned to the agent
+```
+
+The derived index stores the source workout ID and date, chunk kind/index,
+optional section label, title, original chunk text, metadata, content hash,
+embedding model, vector, and timestamps. A whole-plan `day` chunk is created
+for every non-empty plan. Additional `section` chunks are created for recognized
+Fitness, Performance, HYROX, Tread, Row, and Floor headings. The chunk text is
+enriched before embedding with plan metadata and expansions for common workout
+abbreviations (for example, `DB` → dumbbell and `EMOM` → every minute on the
+minute).
+
+The index is safe to rebuild: synchronization reads source rows, calls Ollama
+outside a DuckDB write lock, then upserts only chunks whose content hash or
+embedding model changed and deletes stale chunks. Workout rows are never
+modified. Searches refresh the workout index by default; operators can also run
+`python scripts/index_semantic_documents.py [--domain workout|memory|all]` or
+add `--dry-run` to validate without writing.
 
 ## Direct Command Boundary
 
@@ -33,6 +64,26 @@ delivery. It reads pending rows through `get_pending_outbox`, sends through
 OpenClaw's Telegram channel, and calls `mark_outbox_delivered` only after a
 successful send response.
 
+### `search_documents` contract
+
+Required input: `query`. Optional inputs are `domain` (currently `workout`),
+`top_k` (1–10, default 5), inclusive `start_date` and `end_date`, exact
+case-insensitive `section`, and exact case-insensitive `structure_type`.
+
+Groundhog embeds the query with the configured local embedding model, limits
+candidate chunks to the same embedding model, applies supplied filters, and
+uses DuckDB cosine similarity. Multiple matching chunks from the same workout
+are deduplicated so the response contains one highest-scoring evidence item per
+workout. Each result includes the stable `source_id`, workout date and metadata,
+the matching chunk/section, its text, the full authoritative workout description,
+and a similarity score.
+
+Use this tool for requests by meaning, movements, equipment, format, similarity,
+or training focus. Use `get_workout_for_date` for a known date and `run_sql` for
+counts, aggregates, or structured analysis. The LangGraph system prompt enforces
+this distinction for non-date workout lookups. Do not use semantic search for
+stock prices, signals, or other structured data.
+
 ## Local LLM Boundary
 
 Groundhog may use the configured local Ollama model to create daily summaries
@@ -42,6 +93,7 @@ change systemd configuration; or mark an item delivered. Generated summaries
 are stored in `derived_artifacts` and require OpenClaw or user review before
 any user-facing delivery.
 
-Workout semantic search also uses local Ollama embeddings. The index contains
-derived copies of stored workout-plan text and may be rebuilt safely; source
-workout rows remain authoritative and are never changed by search.
+Workout semantic search uses only local Ollama embeddings (`qwen3-embedding:0.6b`
+in the current configuration). No workout text or query is sent to an external
+embedding service. Embeddings rank stored evidence; they do not create workout
+facts, schedule a workout, save a selection, or alter a plan.
