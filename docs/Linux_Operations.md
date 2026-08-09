@@ -8,19 +8,19 @@ Current Linux deployment assumptions:
 - Deployment branch: `main` (tracks `origin/main`)
 - DuckDB: `/home/openclaw/data/groundhog/groundhog.duckdb`
 - OpenClaw gateway: user systemd service on `127.0.0.1:18789`
-- Ollama: `http://192.168.1.13:11434`
+- Ollama: `http://Vijays-MacBook-Pro.local:11434`
 - Privacy: local Ollama only; no OpenAI or Anthropic fallback
 
 ## Ollama Access
 
 When Groundhog runs on Linux but Ollama runs on the Mac, the Mac Ollama base URL
 is configured explicitly in `config/settings.py` as
-`OLLAMA_BASE_URL=http://192.168.1.13:11434`.
+`OLLAMA_BASE_URL=http://Vijays-MacBook-Pro.local:11434`.
 
 Verify from Linux:
 
 ```bash
-curl http://192.168.1.13:11434/api/tags
+curl http://Vijays-MacBook-Pro.local:11434/api/tags
 venv/bin/python tests/smoke_test.py
 ```
 
@@ -176,12 +176,12 @@ returns to activity-result mode.
 
 ## Spending Screenshot Intake
 
-Install the `groundhog-spending-router` plugin from
-`deploy/openclaw/plugins/groundhog-spending-router` with `openclaw plugins install`.
-It registers `/expense` as a direct Telegram command that runs before the chat
-model. It invokes the local Wallet and bank transaction importer, archives the screenshot under
-Groundhog data, marks the media watcher checkpoint so it cannot be re-imported
-as an activity, and replies with imported transactions and their short IDs.
+The `groundhog-spending-router` plugin lives at
+`deploy/openclaw/plugins/groundhog-spending-router`. It registers `/expense` as
+a direct Telegram command that runs before the chat model. It invokes the local
+Wallet and bank transaction importer, archives the screenshot under Groundhog
+data, marks the media watcher checkpoint so it cannot be re-imported as an
+activity, and replies with imported transactions and their short IDs.
 
 Correct a category later with:
 
@@ -191,26 +191,31 @@ Correct a category later with:
 
 The importer resolves Wallet relative dates and bank calendar dates, skips
 pending charges, ignores running balances, and deduplicates matching merchant
-and amount pairs within a three-day posting window. It does not change the
-default activity/plan/sleep image routes.
+and amount pairs within a three-day posting window. Circle K merchant names are
+always categorized as `beer`. It does not change the default activity, plan, or
+sleep image routes.
 
-Install it as `openclaw`:
+Install and verify it as `openclaw`:
 
 ```bash
-cp deploy/systemd/user/groundhog-openclaw-media.service ~/.config/systemd/user/
-cp deploy/systemd/user/groundhog-openclaw-media.timer ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now groundhog-openclaw-media.timer
+cd /home/openclaw/apps/groundhog
+openclaw plugins install /home/openclaw/apps/groundhog/deploy/openclaw/plugins/groundhog-spending-router
+openclaw plugins enable groundhog-spending-router
+systemctl --user restart openclaw-gateway.service
+systemctl --user is-active openclaw-gateway.service
+openclaw plugins inspect groundhog-spending-router --runtime --json
 ```
 
-The first service run must initialize the checkpoint without importing older
-Telegram images:
+After future deployments, the plugin is path-backed, so pulling `main` and
+restarting `openclaw-gateway.service` loads the new code. Runtime inspection
+must show `status: loaded`, commands `expense` and `expense-category`, and no
+diagnostics.
+
+Useful database checks:
 
 ```bash
-GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb \
-GROUNDHOG_OPENCLAW_MEDIA_INBOUND_DIR=/home/openclaw/media/inbound \
-GROUNDHOG_OPENCLAW_MEDIA_STATE_PATH=/home/openclaw/data/groundhog/openclaw_activity_media_state.json \
-venv/bin/python -m scripts.import_openclaw_activity_media --initialize
+venv/bin/python -c "import duckdb; from config.settings import DB_PATH; con=duckdb.connect(str(DB_PATH)); print(con.execute('SELECT transaction_date, merchant, amount, category FROM spending ORDER BY transaction_date DESC, created_at DESC LIMIT 20').fetchall())"
+venv/bin/python -m unittest tests.test_spending_ingestion
 ```
 
 ## OpenClaw Stock Schedule

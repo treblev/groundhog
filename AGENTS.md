@@ -1,6 +1,6 @@
 # Groundhog — Agent Instructions
 
-Personal data pipeline + local AI agent. Ingests health, sleep, workout, and stock data into a local DuckDB database. Runs technical analysis signals and fires macOS alerts. Answers natural-language questions via an LLM agent backed by MCP tools.
+Personal data pipeline + local AI agent. Ingests health, sleep, workout, spending, and stock data into a local DuckDB database. Runs technical analysis signals and fires alerts. Answers natural-language questions via an LLM agent backed by MCP tools.
 
 **Full handoff context**: `docs/AI_Handoff.md`
 
@@ -10,14 +10,15 @@ Personal data pipeline + local AI agent. Ingests health, sleep, workout, and sto
 
 ```
 config/          settings.py (all paths/models), watchlist.txt
-ingestion/       schema.py, stocks.py, sleep.py, workouts.py, health.py
+ingestion/       schema.py, stocks.py, sleep.py, workouts.py, health.py, spending.py
 analytics/       signals.py (SMA+Supertrend), alerts.py (notifications)
 mcp_server/      server.py — stdio MCP tool server (DO NOT MODIFY)
 mcp_client/      client.py — old hand-rolled agent loop (reference only)
-langgraph_client/client.py — new LangGraph agent (IN PROGRESS, step 2/7)
+langgraph_client/client.py — active LangGraph agent
 scripts/         daily_stocks.sh, update_watchlist.py
+deploy/openclaw/ OpenClaw skills, plugins, and deployment assets
 notebooks/       vision and agent prompt eval experiments
-docs/            AI_Handoff.md
+docs/            architecture, operations, and feature plans
 data/            gitignored — DB, logs, drop folders
 ```
 
@@ -33,7 +34,8 @@ python ingestion/schema.py   # create tables (idempotent)
 # Models needed: qwen3.6:latest, qwen3-vl:latest, nomic-embed-text
 ```
 
-No environment variables needed. All config in `config/settings.py`.
+`GROUNDHOG_DB_PATH` is required. Other paths and models are configured in
+`config/settings.py`, with environment-variable overrides where defined.
 
 ---
 
@@ -43,6 +45,7 @@ No environment variables needed. All config in `config/settings.py`.
 python ingestion/stocks.py        # fetch OHLCV for all 105 watchlist tickers
 python ingestion/sleep.py         # process screenshots from data/drop/sleep8/
 python ingestion/workouts.py      # process screenshots from data/drop/workouts/
+python -m ingestion.spending import --image <path> --reference-date YYYY-MM-DD
 python analytics/signals.py       # compute SMA50/200 + Supertrend signals
 python analytics/alerts.py        # check direction flips, record deduped alerts, optionally notify
 python scripts/update_watchlist.py  # refresh Nasdaq-100 tickers from Wikipedia
@@ -81,6 +84,9 @@ No linter configured.
 | SMA | `ta` library | Same reason — pandas-ta broken |
 | Weekly signals | Resample daily OHLCV with `resample("W-FRI")` | Don't fetch weekly bars from yfinance |
 | Workout/sleep dates | From filename | Screenshot OCR is unreliable for dates |
+| Spending intake | Direct OpenClaw `/expense` command | Bypasses model routing and deterministically invokes Groundhog ingestion |
+| Spending dates | Visible transaction label + Phoenix upload date | Wallet uses relative labels; bank screenshots may contain calendar dates |
+| Spending deduplication | Same merchant and amount within three days | Covers posting-date shifts between Wallet and bank views |
 | Watchlist default period | `"2y"` | SMA200 needs 200+ rows; `"1d"` was not enough |
 
 ---
@@ -96,6 +102,8 @@ No linter configured.
 7. Supertrend direction flip fires on the **previous bar's** band value (Pine Script `up1`/`dn1` pattern)
 8. yfinance returns NaN for some tickers (ADI, LIN) — always run through `_safe()` before inserting
 9. Vision LLM (`qwen3-vl`) is slow — 14+ min for complex screenshots; only process daily images
+10. Spending screenshots may show a charge and a running balance — import only the charge amount
+11. Pending spending rows are skipped; posted rows require a merchant, amount, and resolvable date
 
 ---
 
@@ -118,4 +126,10 @@ No linter configured.
 - **Alerts**: `SELECT * FROM stock_alerts ORDER BY notified_at DESC LIMIT 10;`
 - **Schema changes**: re-run `ingestion/schema.py` — must be idempotent (no errors on second run)
 - **Agent**: ask "what is the latest closing price for AAPL?" — should return a number without errors
+- **Spending**: run `python -m unittest tests.test_spending_ingestion`; verify `/expense` imports posted rows and `/expense-category` updates one short transaction ID
 - **Anything touching Supertrend**: spot-check AAPL or MSFT direction against TradingView Supertrend (period=10, multiplier=3)
+
+## Communication
+
+- Explain issues directly and concisely. State what happened, why it happened, and what changed. Avoid jargon, unnecessary implementation detail, and restating prior context.
+- If the user asks a question, answer the question only. Do not start implementing changes unless the user explicitly asks for implementation.

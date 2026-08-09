@@ -3,6 +3,16 @@
 OpenClaw connects to the `groundhog` stdio MCP server. Groundhog exposes local
 facts and state; OpenClaw chooses the user-facing wording and delivery channel.
 
+## Direct Command Boundary
+
+Spending screenshot ingestion does not use MCP. The registered OpenClaw
+commands `/expense` and `/expense-category` are provided by
+`deploy/openclaw/plugins/groundhog-spending-router` and invoke
+`ingestion.spending` directly. This deterministic route prevents the chat model
+from treating an expense upload as a general image question or repeatedly
+deciding whether to call a tool. Do not add an overlapping spending-write MCP
+tool unless the direct-command design is intentionally replaced.
+
 ## Service Tool Contract
 
 | Tool | Input | Result | Ownership |

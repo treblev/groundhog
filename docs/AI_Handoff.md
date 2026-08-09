@@ -4,9 +4,9 @@
 
 ## 1. Project Purpose and Current Status
 
-**Groundhog** is a personal data pipeline and local AI agent. It ingests health, sleep, workout, and stock market data into a single local DuckDB database, runs technical analysis signals, fires macOS alerts on trading signals, and answers natural-language questions about the data via an LLM agent.
+**Groundhog** is a personal data pipeline and local AI agent. It ingests health, sleep, workout, spending, and stock market data into a single local DuckDB database, runs technical analysis signals, fires alerts on trading signals, and answers natural-language questions about the data via an LLM agent.
 
-**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Production on Linux tracks the `main` branch under the `openclaw` service user. Telegram screenshots are imported deterministically; Telegram text questions use `/ask <question>` to invoke the guarded LangGraph agent. The agent has mutable todos, a 12-tool-call limit, database-grounding retries, and an internal-details disclosure guard. Dedicated tools now cover activity and sleep summaries, workout lookup, data freshness, and a market summary that includes Bitcoin. OpenClaw handles chat, scheduling, and delivery; Groundhog remains the local data and analytics layer.
+**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Production on Linux tracks the `main` branch under the `openclaw` service user. Telegram activity, workout, sleep, and spending screenshots are imported deterministically; Telegram text questions use `/ask <question>` to invoke the guarded LangGraph agent. `/expense` bypasses chat-model routing and invokes Groundhog's local spending importer directly. The agent has mutable todos, a 12-tool-call limit, database-grounding retries, and an internal-details disclosure guard. Dedicated tools cover activity and sleep summaries, workout lookup, data freshness, and a market summary that includes Bitcoin. OpenClaw handles chat, commands, scheduling, and delivery; Groundhog remains the local data and analytics layer.
 
 ---
 
@@ -14,16 +14,17 @@
 
 ```
 data sources → ingestion/ → DuckDB → analytics/ → alerts
-                                          ↓
-                               mcp_server/ (tool server, stdio)
-                                          ↓
-                          langgraph_client/ (active — create_agent())
-                          mcp_client/      (legacy hand-rolled loop, kept for reference)
+                    ↑                     ↓
+Telegram /expense → OpenClaw plugin       mcp_server/ (stdio tools)
+                                              ↓
+                                  langgraph_client/ (active agent)
+                                  mcp_client/ (legacy reference)
 ```
 
-- **Ingestion**: yfinance (stocks), fitness activity screenshots via vision LLM → `activities`, SugarWOD plan screenshots via vision LLM → `workouts`, and Sleep8 screenshots → `sleep_metrics`
+- **Ingestion**: yfinance (stocks), fitness activity screenshots via vision LLM → `activities`, SugarWOD plan screenshots → `workouts`, Sleep8 screenshots → `sleep_metrics`, and Wallet/bank transaction-list screenshots → `spending`
 - **Analytics**: SMA50/200 crossover, Supertrend (daily + weekly) → `stock_signals` → `stock_alerts`
 - **Agent**: MCP tool server (stdio JSON-RPC) + LangGraph client (`create_agent()`), replacing the hand-rolled loop
+- **Direct commands**: OpenClaw's `groundhog-spending-router` handles `/expense` and `/expense-category` before agent dispatch; it calls `ingestion.spending` directly
 - **Scheduling**: OpenClaw cron under `openclaw` (daily stocks: 5 PM America/Phoenix, weekdays)
 - **AI**: Ollama local only. `qwen3.6:latest` for SQL/text, `qwen3-vl:latest` for vision, `nomic-embed-text` for memory embeddings. No external API calls with personal data.
 
@@ -40,6 +41,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 | `ingestion/sleep.py` | Drops sleep screenshots → vision LLM → sleep_metrics upsert. Date from filename. |
 | `ingestion/workouts.py` | Drops SugarWOD screenshots → vision LLM → workouts upsert. Hash-based dedup ID. |
 | `ingestion/health.py` | Activity-result screenshot importer. Supports a direct `--image` path for OpenClaw attachments and writes to `activities`. |
+| `ingestion/spending.py` | Local vision importer for Wallet and bank transaction lists. Resolves dates, filters pending rows, classifies, deduplicates, archives, and writes to `spending`. |
 | `analytics/signals.py` | SMA50/200 + Supertrend (daily+weekly). Uses `ta` lib for SMA, manual pandas for Supertrend. |
 | `analytics/alerts.py` | Reads signal direction flips → optional notification → stock_alerts dedup. |
 | `mcp_server/server.py` | MCP stdio tool server. Core data tools plus documented service-state tools in `docs/OpenClaw_MCP.md`. |
@@ -47,6 +49,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 | `langgraph_client/client.py` | Active agent. Uses LangChain's `create_agent()` with MCP tools wrapped as async Python functions. |
 | `scripts/ask_groundhog.py` | One-question CLI used by Telegram `/ask`; prints only the guarded agent answer. |
 | `deploy/openclaw/skills/groundhog-ask/SKILL.md` | OpenClaw skill that routes Telegram `/ask` messages to `scripts.ask_groundhog`. |
+| `deploy/openclaw/plugins/groundhog-spending-router/` | Direct OpenClaw command plugin for `/expense` imports and `/expense-category` corrections. |
 | `groundhog_service.py` | Service CLI: `run daily-stocks` and `status` |
 | `scripts/daily_stocks.sh` | Manual compatibility entrypoint to `groundhog_service.py run daily-stocks` |
 | `scripts/openclaw_deliver_outbox.py` | OpenClaw-side delivery bridge: Groundhog MCP outbox → OpenClaw Telegram → mark delivered on success. |
@@ -57,6 +60,7 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 | `deploy/systemd/user/groundhog-daemon.service` | Optional always-on daemon service; do not enable alongside the timer. |
 | `deploy/systemd/user/groundhog-openclaw-media.{service,timer}` | One-minute OpenClaw inbound-media watcher for Telegram screenshots. |
 | `docs/Linux_Operations.md` | Linux host runbook for stock jobs and the OpenClaw schedule. |
+| `docs/Spending_Skills_Plan.md` | Spending capability boundaries, current workflows, and future skill plan. |
 
 ---
 
@@ -87,6 +91,10 @@ data sources → ingestion/ → DuckDB → analytics/ → alerts
 - **Weekly Supertrend**: resample daily OHLCV to weekly with `resample("W-FRI")` — do not fetch weekly bars from yfinance
 - **Hash-based workout IDs**: `SHA256(date|name|description[:50])[:16]` for safe re-runs
 - **Telegram screenshots are deterministic**: do not rely on the OpenClaw chat model to interpret an image. `groundhog-openclaw-media.timer` scans `/home/openclaw/media/inbound` once per minute and calls the local `qwen3-vl:latest` importer.
+- **Spending uses a registered command, not model routing**: `/expense` is owned by the OpenClaw spending plugin and directly invokes `python -m ingestion.spending`. This prevents generic chat responses and repeated tool-selection attempts.
+- **Spending dates come from the transaction row**: explicit bank dates are parsed directly; relative Wallet labels are resolved against the Phoenix-local upload date.
+- **Spending imports are idempotent**: an identical image hash is skipped, and the same merchant/amount within a three-day window is treated as a duplicate across screenshots.
+- **Merchant rules override vision guesses**: normalized Circle K merchants are always categorized as `beer`; manual category correction remains available.
 - **One SugarWOD screenshot is one plan**: multiple visible cards/sections are combined into one `workouts` record, with all card text in `description`.
 - **MCP DuckDB lifecycle**: `mcp_server/server.py` must open and close its DuckDB connection per tool call. A persistent write connection blocks ingestion in another process.
 - **Watchlist default period**: `"2y"` (changed from `"1d"` — 1d wasn't enough for SMA200)
@@ -123,6 +131,7 @@ python ingestion/schema.py
 python ingestion/stocks.py          # fetch OHLCV for all watchlist tickers
 python ingestion/sleep.py           # process sleep screenshots from data/drop/sleep8/
 python ingestion/workouts.py        # process workout screenshots from data/drop/workouts/
+python -m ingestion.spending import --image <path> --reference-date YYYY-MM-DD
 
 # Analytics
 python analytics/signals.py         # compute SMA + Supertrend signals
@@ -134,7 +143,7 @@ python scripts/update_watchlist.py  # scrape Nasdaq-100 from Wikipedia, merge
 # Agent (old hand-rolled)
 python mcp_client/client.py
 
-# Agent (new LangGraph — incomplete)
+# Agent (active LangGraph client)
 python langgraph_client/client.py
 
 # Tests
@@ -165,7 +174,7 @@ The systemd timer is pinned to `America/Phoenix`.
 Ollama base URL is configured in `config/settings.py`:
 
 ```python
-OLLAMA_BASE_URL = "http://192.168.1.13:11434"
+OLLAMA_BASE_URL = "http://Vijays-MacBook-Pro.local:11434"
 ```
 
 ---
@@ -191,6 +200,9 @@ sleep_metrics        -- date, resting_hr, hrv, breath_rate,
 workouts             -- id, date, day_of_week, name, category, structure_type, description
 reminders            -- SCD Type 2: valid_from, valid_to, is_current
 activities           -- Garmin activity summary (legacy)
+spending             -- id, transaction_date, visible_date_label, merchant, amount,
+                     --   payment_method, category, source_image_hash, source_row,
+                     --   created_at, updated_at
 memory               -- agent memory store: key, value, updated_at
 ```
 
@@ -225,6 +237,8 @@ No external APIs receive personal data. No API keys needed.
 10. **`INSERT OR REPLACE` doesn't exist in DuckDB** — SQLite only. Use `ON CONFLICT DO UPDATE SET` or `ON CONFLICT DO NOTHING`.
 11. **Linux timers run under `openclaw`** — keep linger enabled so user services continue without login.
 12. **Vision LLM is slow**: `qwen3-vl:latest` can take 14+ minutes for complex screenshots. Workouts ingestion only processes daily screenshots, not weekly calendar views.
+13. **Transaction screenshots may show two amounts**: bank rows often show the charge plus a smaller running balance. Only the charge belongs in `spending`.
+14. **Pending transactions are not imported**: a row explicitly labeled pending is skipped. Posted rows need a merchant, charge amount, and resolvable date.
 
 ---
 
@@ -257,6 +271,9 @@ In order (most recent last):
 - Added tool-call limits, grounding retries, and internal-details response protection
 - Added dedicated activity summary, sleep summary, workout lookup, data freshness, and Bitcoin-inclusive market-summary tools
 - Promoted the tested `long-running-agent` history into `main`; Linux production now tracks `main`
+- Added deterministic `/expense` and `/expense-category` commands through the OpenClaw spending plugin
+- Added Wallet and bank transaction-list vision ingestion, the `spending` table, pending-row filtering, date parsing, image and cross-screenshot deduplication, and source-image archiving
+- Added fixed merchant categorization so Circle K spending is always classified as `beer`
 
 ---
 
