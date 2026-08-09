@@ -194,6 +194,23 @@ def init_db(db_path: Path | str | None = None):
         )
     """)
 
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS spending (
+            id VARCHAR PRIMARY KEY,
+            transaction_date DATE NOT NULL,
+            visible_date_label VARCHAR,
+            merchant VARCHAR NOT NULL,
+            amount DECIMAL(12, 2) NOT NULL,
+            payment_method VARCHAR,
+            category VARCHAR NOT NULL,
+            source_image_hash VARCHAR NOT NULL,
+            source_row INTEGER NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (source_image_hash, source_row)
+        )
+    """)
+
     con.close()
 
 if __name__ == "__main__":

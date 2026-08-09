@@ -1,0 +1,19 @@
+{
+  "id": "groundhog-spending-router",
+  "name": "Groundhog spending router",
+  "description": "Deterministically imports Apple Wallet screenshots captioned with /expense.",
+  "activation": {
+    "onStartup": true,
+    "onConfigPaths": ["plugins.entries.groundhog-spending-router"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "appDir": {"type": "string"},
+      "python": {"type": "string"},
+      "mediaRoot": {"type": "string"},
+      "mediaStatePath": {"type": "string"}
+    }
+  }
+}
