@@ -14,6 +14,7 @@ from mcp.types import TextContent, Tool
 
 from agent.memory import remember, recall
 from agent.outbox import set_outbox_status
+from agent.semantic_search import search_documents
 from config.settings import DB_PATH
 
 server = Server("groundhog")
@@ -63,6 +64,27 @@ async def list_tools() -> list[Tool]:
             name="get_workout_for_date",
             description="Get the planned workout for a YYYY-MM-DD date.",
             inputSchema={"type": "object", "properties": {"date": {"type": "string"}}, "required": ["date"]},
+        ),
+        Tool(
+            name="search_documents",
+            description=(
+                "Required for non-date workout lookup: search stored workout plans by meaning, "
+                "movements, equipment, format, or similarity. Use get_workout_for_date only for "
+                "an exact date and run_sql only for counts or aggregates."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Natural-language semantic search query."},
+                    "domain": {"type": "string", "enum": ["workout"], "default": "workout"},
+                    "top_k": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
+                    "start_date": {"type": "string", "description": "Optional inclusive YYYY-MM-DD lower bound."},
+                    "end_date": {"type": "string", "description": "Optional inclusive YYYY-MM-DD upper bound."},
+                    "section": {"type": "string", "description": "Optional track filter, such as Fitness, HYROX, Tread, Row, or Floor."},
+                    "structure_type": {"type": "string", "description": "Optional exact workout structure filter."},
+                },
+                "required": ["query"],
+            },
         ),
         Tool(
             name="get_data_freshness",
@@ -160,6 +182,25 @@ def _dispatch(
     connection: duckdb.DuckDBPyConnection | None = None,
 ) -> str:
     """Handle one MCP call without retaining a DuckDB lock between requests."""
+    if name == "search_documents":
+        db_path = DB_PATH
+        if connection is not None:
+            database_rows = connection.execute("PRAGMA database_list").fetchall()
+            database_file = next((row[2] for row in database_rows if row[1] == "memory"), None)
+            if database_file:
+                db_path = database_file
+        results = search_documents(
+            args["query"],
+            domain=args.get("domain", "workout"),
+            top_k=args.get("top_k", 5),
+            start_date=args.get("start_date"),
+            end_date=args.get("end_date"),
+            section=args.get("section"),
+            structure_type=args.get("structure_type"),
+            db_path=db_path,
+        )
+        return json.dumps(results, default=_json_default)
+
     owns_connection = connection is None
     con = connection or duckdb.connect(str(DB_PATH))
     try:

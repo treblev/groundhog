@@ -245,6 +245,32 @@ def _make_tools(session: ClientSession) -> list:
         result = await session.call_tool("get_workout_for_date", {"date": date})
         return result.content[0].text if result.content else "No result."
 
+    async def search_documents(
+        query: str,
+        domain: str = "workout",
+        top_k: int = 5,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        section: str | None = None,
+        structure_type: str | None = None,
+    ) -> str:
+        """Required for non-date workout lookup; search plans by meaning, movements, equipment, format, or similarity."""
+        arguments = {
+            key: value
+            for key, value in {
+                "query": query,
+                "domain": domain,
+                "top_k": top_k,
+                "start_date": start_date,
+                "end_date": end_date,
+                "section": section,
+                "structure_type": structure_type,
+            }.items()
+            if value is not None
+        }
+        result = await session.call_tool("search_documents", arguments)
+        return result.content[0].text if result.content else "No result."
+
     async def get_data_freshness() -> str:
         """Get the latest available date for every Groundhog data source."""
         result = await session.call_tool("get_data_freshness", {})
@@ -271,13 +297,20 @@ def _make_tools(session: ClientSession) -> list:
         return result.content[0].text if result.content else "Nothing found."
 
     return [run_sql, get_latest_price, get_recent_activities, get_activity_summary, get_sleep_summary,
-            get_workout_for_date, get_data_freshness, get_market_summary, get_health_summary, remember, recall]
+            get_workout_for_date, search_documents, get_data_freshness, get_market_summary,
+            get_health_summary, remember, recall]
 
 
 async def _build_schema(session: ClientSession) -> str:
     schema_result = await session.call_tool("run_sql", {"query": "SHOW TABLES"})
     tables_raw = schema_result.content[0].text if schema_result.content else ""
-    tables = [line.strip() for line in tables_raw.splitlines() if line.strip() and line.strip() != "name"]
+    tables = [
+        line.strip()
+        for line in tables_raw.splitlines()
+        if line.strip()
+        and line.strip() != "name"
+        and line.strip() != "semantic_chunks"
+    ]
 
     schema_parts = []
     for table in tables:
@@ -312,6 +345,12 @@ def _system_prompt(schema: str) -> str:
         "(e.g. sleep_metrics, workouts) yourself before answering. Do not ask the user for "
         "permission to check — just check.\n"
         "For comparison queries: if only one period appears, the missing period is zero.\n"
+        "For EVERY workout lookup that is not an exact-date lookup, count, or aggregate, you MUST "
+        "call search_documents before answering. This includes similar plans, movements, equipment, "
+        "training focus, recommendations, and requests for the best matching stored workout. "
+        "Do not substitute run_sql for semantic workout retrieval. "
+        "Use get_workout_for_date for exact dates and run_sql for counts or structured analysis. "
+        "Stock prices and signals are structured data and must use database tools, not semantic search.\n"
         "NEVER call remember() unless the user explicitly says 'remember' or 'save'.\n"
         "Call recall() ONLY for questions about personal opinions, preferences, or stated beliefs.\n"
         f"\nDatabase schema:\n{schema}"
@@ -337,7 +376,11 @@ async def ask_question(question: str) -> str:
             tools = _make_tools(session)
 
             agent = create_agent(
-                model=ChatOllama(model=OLLAMA_SQL_MODEL, base_url=OLLAMA_BASE_URL),
+                model=ChatOllama(
+                    model=OLLAMA_SQL_MODEL,
+                    base_url=OLLAMA_BASE_URL,
+                    temperature=0,
+                ),
                 tools=tools,
                 middleware=_make_middleware(),
                 system_prompt=_system_prompt(schema),

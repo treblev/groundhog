@@ -68,12 +68,37 @@ class WorkoutIngestionTests(unittest.TestCase):
             finally:
                 con.close()
 
-    def test_direct_upload_requires_explicit_date(self):
+    def test_direct_upload_accepts_an_undated_template(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            image_path = Path(temp_dir) / "telegram-upload.png"
-            image_path.write_bytes(b"not a real image")
-            with self.assertRaisesRegex(ValueError, "YYYY-MM-DD"):
-                workouts.process_image(image_path)
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "groundhog.duckdb"
+            image_path = temp_path / "orange-theory.png"
+            image_path.write_bytes(b"image bytes")
+            schema.init_db(db_path)
+            with (
+                patch.object(workouts, "DB_PATH", db_path),
+                patch.object(workouts, "WORKOUTS_DROP_FOLDER", temp_path / "drop"),
+                patch.object(workouts, "PROCESSED_DIR", temp_path / "processed"),
+                patch.object(
+                    workouts,
+                    "_query_ollama",
+                    return_value=(
+                        '[{"name":"August Tornado Template #1",'
+                        '"category":"OrangeTheory","structure_type":"tornado",'
+                        '"description":"Tread Block 1: 3:30\\n1:30 push"}]'
+                    ),
+                ),
+            ):
+                self.assertEqual(workouts.process_image(image_path), 1)
+
+            con = duckdb.connect(str(db_path), read_only=True)
+            try:
+                row = con.execute(
+                    "SELECT date, day_of_week, category, structure_type FROM workouts"
+                ).fetchone()
+                self.assertEqual(row, (None, None, "OrangeTheory", "tornado"))
+            finally:
+                con.close()
 
     def test_direct_upload_archives_without_moving_the_source(self):
         with tempfile.TemporaryDirectory() as temp_dir:

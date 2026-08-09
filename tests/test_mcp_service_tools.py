@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 import duckdb
 
@@ -107,6 +108,22 @@ class McpServiceToolTests(unittest.TestCase):
         self.assertEqual(summary["bitcoin"]["price"], 101000.0)
         self.assertEqual(summary["bitcoin"]["change_percent"], 1.0)
         self.assertEqual(summary["bitcoin_supertrend"][0]["direction"], "bullish")
+
+    def test_semantic_search_tool_returns_json_results(self):
+        matches = [{"source_id": "workout-1", "name": "Intervals", "score": 0.91}]
+        with patch.object(server, "search_documents", return_value=matches) as search:
+            result = json.loads(
+                self._dispatch(
+                    "search_documents",
+                    {"query": "running intervals", "top_k": 3},
+                )
+            )
+
+        self.assertEqual(result, matches)
+        search.assert_called_once()
+        self.assertEqual(search.call_args.args[0], "running intervals")
+        self.assertEqual(search.call_args.kwargs["domain"], "workout")
+        self.assertEqual(search.call_args.kwargs["top_k"], 3)
 
 
 if __name__ == "__main__":

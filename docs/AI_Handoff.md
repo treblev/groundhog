@@ -26,7 +26,7 @@ Telegram /expense → OpenClaw plugin       mcp_server/ (stdio tools)
 - **Agent**: MCP tool server (stdio JSON-RPC) + LangGraph client (`create_agent()`), replacing the hand-rolled loop
 - **Direct commands**: OpenClaw's `groundhog-spending-router` handles `/expense` and `/expense-category` before agent dispatch; it calls `ingestion.spending` directly
 - **Scheduling**: OpenClaw cron under `openclaw` (daily stocks: 5 PM America/Phoenix, weekdays)
-- **AI**: Ollama local only. `qwen3.6:latest` for SQL/text, `qwen3-vl:latest` for vision, `nomic-embed-text` for memory embeddings. No external API calls with personal data.
+- **AI**: Ollama local only. `qwen3.6:latest` for SQL/text, `qwen3-vl:latest` for vision, `qwen3-embedding:0.6b` for memory and semantic-search embeddings. No external API calls with personal data.
 
 ---
 
@@ -198,6 +198,7 @@ stock_alerts         -- id, date, ticker, alert_type, message, notified_at
 sleep_metrics        -- date, resting_hr, hrv, breath_rate,
                      --   time_to_fall_asleep_minutes (nullable), deep_sleep_minutes (nullable)
 workouts             -- id, date, day_of_week, name, category, structure_type, description
+semantic_chunks      -- generic local embedding index; workout day + section chunks in v1
 reminders            -- SCD Type 2: valid_from, valid_to, is_current
 activities           -- Garmin activity summary (legacy)
 spending             -- id, transaction_date, visible_date_label, merchant, amount,
@@ -216,7 +217,7 @@ All tables created idempotently by `ingestion/schema.py`.
 |---------|---------|-------|
 | yfinance | Stock OHLCV data | Free, no auth needed |
 | Wikipedia | Nasdaq-100 ticker list | Requires httpx + browser User-Agent; urllib gets 403 |
-| Ollama | LLM inference | Must be reachable at `OLLAMA_BASE_URL`; models: qwen3.6:latest, qwen3-vl:latest, nomic-embed-text |
+| Ollama | LLM inference | Must be reachable at `OLLAMA_BASE_URL`; models: qwen3.6:latest, qwen3-vl:latest, qwen3-embedding:0.6b |
 | notify-send / osascript / stdout | Optional local notification backend | `GROUNDHOG_ALERT_BACKEND=auto|none|notify-send|osascript|stdout` |
 
 No external APIs receive personal data. No API keys needed.

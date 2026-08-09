@@ -145,6 +145,26 @@ def init_db(db_path: Path | str | None = None):
     """)
 
     con.execute("""
+        CREATE TABLE IF NOT EXISTS semantic_chunks (
+            id VARCHAR PRIMARY KEY,
+            domain VARCHAR NOT NULL,
+            source_id VARCHAR NOT NULL,
+            source_date DATE,
+            chunk_kind VARCHAR NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            section_label VARCHAR,
+            title VARCHAR,
+            content TEXT NOT NULL,
+            metadata JSON NOT NULL,
+            content_hash VARCHAR NOT NULL,
+            embedding_model VARCHAR NOT NULL,
+            embedding FLOAT[] NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    con.execute("""
         CREATE TABLE IF NOT EXISTS agent_runs (
             id VARCHAR PRIMARY KEY,
             job_name VARCHAR NOT NULL,

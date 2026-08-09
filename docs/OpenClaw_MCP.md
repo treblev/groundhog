@@ -17,6 +17,7 @@ tool unless the direct-command design is intentionally replaced.
 
 | Tool | Input | Result | Ownership |
 | --- | --- | --- | --- |
+| `search_documents` | semantic query, workout domain, optional result/date/section/structure filters | JSON list of ranked workout-plan evidence | Groundhog refreshes its derived local index and reads workout facts |
 | `get_recent_events` | optional `limit` | JSON list of durable events | Groundhog reads facts |
 | `get_pending_outbox` | optional `limit` | JSON list of pending delivery items and source event data | Groundhog exposes pending facts |
 | `get_agent_run_status` | none | JSON list with the most recent job run | Groundhog exposes job health |
@@ -40,3 +41,7 @@ must not write raw health, activity, stock, signal, alert, or memory records;
 change systemd configuration; or mark an item delivered. Generated summaries
 are stored in `derived_artifacts` and require OpenClaw or user review before
 any user-facing delivery.
+
+Workout semantic search also uses local Ollama embeddings. The index contains
+derived copies of stored workout-plan text and may be rebuilt safely; source
+workout rows remain authoritative and are never changed by search.

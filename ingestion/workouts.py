@@ -22,7 +22,7 @@ OLLAMA_URL = OLLAMA_CHAT_URL
 PROCESSED_DIR = WORKOUTS_DROP_FOLDER / "processed"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
-PROMPT = """You are extracting one complete daily workout plan from a SugarWOD screenshot.
+PROMPT = """You are extracting one complete workout plan from a SugarWOD or OrangeTheory screenshot.
 
 Always return a JSON array containing exactly one object. A screenshot may show
 multiple cards or sections (for example, a HYROX section followed by strength
@@ -34,7 +34,7 @@ Return:
   "date_day": <integer day-of-month from the column header, or null>,
   "date": <"YYYY-MM-DD" if fully visible, otherwise null>,
   "name": <the main workout title, or the first card header if no overall title exists>,
-  "category": <the primary visible label, or null>,
+  "category": <"OrangeTheory" for Tornado or Tread/Row/Floor templates; otherwise the primary visible label, or null>,
   "structure_type": <the primary format, or null if the plan has multiple formats>,
   "description": <all sections and cards in reading order, including each card heading and its full text, preserving newlines as \\n>
 }
@@ -46,10 +46,17 @@ structure_type rules:
 - "for_time"  → text contains "for time" or a time cap like "(15 cap)"
 - "strength"  → a lift with a rep scheme like "8-8-6-6-4-4" or "5-5-5-3-3-3"
 - "intervals" → timed work/rest blocks like "30 second work / 2 minute rest"
+- "tornado"   → an OrangeTheory Tornado template rotating through Tread, Row, and Floor blocks
 - null        → if unclear
 
-Do not infer dates from the screen; the importer assigns the date from the
-screenshot filename.
+OrangeTheory rules:
+- A plan organized into Tread, Row, and Floor blocks is an OrangeTheory plan.
+- Preserve every numbered block, duration, push/base/all-out cue, distance,
+  repetition count, exercise, and bonus instruction in reading order.
+- Do not include performance results or completion statistics.
+
+Do not infer dates from the screen. The importer assigns a date from trusted
+filename or upload metadata when available; undated templates are valid.
 
 Return null for any field not visible. No explanation, just the JSON array."""
 
@@ -122,12 +129,12 @@ def _date_from_filename(path: Path) -> Optional[date]:
         return None
 
 
-def _apply_filename_date(workouts: list[dict], screenshot_date: date) -> None:
-    """Use the filename as the authoritative date for every imported workout."""
+def _apply_filename_date(workouts: list[dict], screenshot_date: date | None) -> None:
+    """Use trusted metadata as the date, or explicitly retain an undated plan."""
     for w in workouts:
-        w["date"] = screenshot_date.isoformat()
-        w["date_day"] = screenshot_date.day
-        w["day_of_week"] = screenshot_date.strftime("%a").upper()
+        w["date"] = screenshot_date.isoformat() if screenshot_date else None
+        w["date_day"] = screenshot_date.day if screenshot_date else None
+        w["day_of_week"] = screenshot_date.strftime("%a").upper() if screenshot_date else None
 
 
 def _workout_id(workout: dict) -> str:
@@ -170,8 +177,8 @@ def _archive_image(image_path: Path, upload_id: str) -> Path:
 def process_image(image_path: Path, screenshot_date: date | None = None) -> int:
     """Extract one screenshot supplied directly by an upload integration.
 
-    The integration supplies the date as metadata; it is used to construct the
-    same filename-derived date that manual drop-folder ingestion requires.
+    Trusted upload metadata or a filename date is authoritative when present;
+    templates without either are stored as undated plans.
     """
     if image_path.suffix.lower() not in IMAGE_EXTS:
         raise ValueError(f"Unsupported image type: {image_path.suffix or '(none)'}")
@@ -182,9 +189,6 @@ def process_image(image_path: Path, screenshot_date: date | None = None) -> int:
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     upload_id = _upload_id(image_path)
     screenshot_date = screenshot_date or _date_from_filename(image_path)
-    if screenshot_date is None:
-        raise ValueError("A valid YYYY-MM-DD workout date is required.")
-
     raw = _query_ollama(image_path)
     workouts = _parse_workouts(raw)
     if not workouts:
@@ -203,7 +207,7 @@ def process_image(image_path: Path, screenshot_date: date | None = None) -> int:
             subject_type="workout_upload",
             subject_id=upload_id,
             payload={
-                "date": screenshot_date.isoformat(),
+                "date": screenshot_date.isoformat() if screenshot_date else None,
                 "source_file": image_path.name,
                 "workout_count": len(workouts),
             },
@@ -236,15 +240,13 @@ def run() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Extract workouts from SugarWOD screenshots.")
+    parser = argparse.ArgumentParser(description="Extract SugarWOD or OrangeTheory workout screenshots.")
     parser.add_argument("--image", type=Path, help="A screenshot provided by an upload integration.")
     parser.add_argument("--date", type=date.fromisoformat, help="Workout date, in YYYY-MM-DD format.")
     args = parser.parse_args()
     if args.image is None:
         run()
         return
-    if args.date is None:
-        parser.error("--date is required when --image is used")
     count = process_image(args.image, args.date)
     print(f"Imported {count} workout(s) from {args.image.name}.")
 

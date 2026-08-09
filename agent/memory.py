@@ -6,21 +6,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import hashlib
 
 import duckdb
-import httpx
-
-from config.settings import OLLAMA_EMBEDDINGS_URL
-
-EMBED_MODEL = "nomic-embed-text"
+from agent.embeddings import embed_text
 
 
 def _embed(text: str) -> list[float]:
-    response = httpx.post(
-        OLLAMA_EMBEDDINGS_URL,
-        json={"model": EMBED_MODEL, "prompt": text},
-        timeout=30.0,
-    )
-    response.raise_for_status()
-    return response.json()["embedding"]
+    return embed_text(text)
 
 
 def remember(con: duckdb.DuckDBPyConnection, fact: str) -> str:

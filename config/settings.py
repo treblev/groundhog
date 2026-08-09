@@ -24,8 +24,10 @@ OPENCLAW_MEDIA_STATE_PATH = Path(
 )
 OLLAMA_VISION_MODEL = "qwen3-vl:latest"
 OLLAMA_SQL_MODEL = "qwen3.6:latest"
+OLLAMA_EMBEDDING_MODEL = "qwen3-embedding:0.6b"
 OLLAMA_BASE_URL = os.environ.get("GROUNDHOG_OLLAMA_BASE_URL", "http://Vijays-MacBook-Pro.local:11434")
 OLLAMA_CHAT_URL = f"{OLLAMA_BASE_URL}/api/chat"
+OLLAMA_EMBED_URL = f"{OLLAMA_BASE_URL}/api/embed"
 OLLAMA_EMBEDDINGS_URL = f"{OLLAMA_BASE_URL}/api/embeddings"
 
 WATCHLIST_FILE = BASE_DIR / "config" / "watchlist.txt"
