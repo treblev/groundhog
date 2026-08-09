@@ -86,7 +86,7 @@ export default definePluginEntry({
     const mediaRoot = resolve(textFrom(config.mediaRoot) || "/home/openclaw/media/inbound");
     const mediaStatePath = textFrom(config.mediaStatePath) || "/home/openclaw/data/groundhog/openclaw_activity_media_state.json";
 
-    api.hooks.on("inbound_claim", async (event) => {
+    api.on("inbound_claim", async (event) => {
       if (event.channel !== "telegram" || !/(?:^|\s)\/expense\b/i.test(event.content ?? event.body ?? "")) return;
       const imagePath = findMediaPath(event, mediaRoot) ?? findRecentMediaPath(mediaRoot, event.timestamp);
       if (!imagePath) return;
