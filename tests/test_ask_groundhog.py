@@ -1,5 +1,6 @@
 import asyncio
 import io
+import os
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -8,11 +9,26 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from langgraph_client import client
 from langgraph_client.client import ask_question
 from scripts import ask_groundhog
 
 
 class AskGroundhogTests(unittest.TestCase):
+    def test_mcp_subprocess_receives_groundhog_database_environment(self):
+        with (
+            patch.dict(os.environ, {"GROUNDHOG_DB_PATH": "/tmp/groundhog-test.duckdb"}),
+            patch.object(client, "stdio_client", side_effect=RuntimeError("stop after parameters")) as stdio,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop after parameters"):
+                asyncio.run(ask_question("test environment forwarding"))
+
+        parameters = stdio.call_args.args[0]
+        self.assertEqual(
+            parameters.env["GROUNDHOG_DB_PATH"],
+            "/tmp/groundhog-test.duckdb",
+        )
+
     def test_empty_question_is_rejected_without_starting_agent(self):
         with self.assertRaises(ValueError):
             asyncio.run(ask_question("  "))

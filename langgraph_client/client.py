@@ -5,6 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import asyncio
 import json
+import os
 import re
 
 from langchain.agents import create_agent
@@ -366,6 +367,7 @@ async def ask_question(question: str) -> str:
     params = StdioServerParameters(
         command=sys.executable,
         args=[SERVER_SCRIPT],
+        env=dict(os.environ),
     )
 
     async with stdio_client(params) as (read, write):
