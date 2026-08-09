@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
@@ -7,26 +7,6 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 function textFrom(value) {
   return typeof value === "string" ? value : "";
-}
-
-function findMediaPath(value, mediaRoot) {
-  if (typeof value === "string") {
-    const candidates = value.match(/\/[\w./-]+\.(?:png|jpe?g)/gi) ?? [];
-    return candidates.find((candidate) => candidate.startsWith(mediaRoot) && existsSync(candidate));
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findMediaPath(item, mediaRoot);
-      if (found) return found;
-    }
-  }
-  if (value && typeof value === "object") {
-    for (const item of Object.values(value)) {
-      const found = findMediaPath(item, mediaRoot);
-      if (found) return found;
-    }
-  }
-  return undefined;
 }
 
 function findRecentMediaPath(mediaRoot, timestamp) {
@@ -86,22 +66,32 @@ export default definePluginEntry({
     const mediaRoot = resolve(textFrom(config.mediaRoot) || "/home/openclaw/media/inbound");
     const mediaStatePath = textFrom(config.mediaStatePath) || "/home/openclaw/data/groundhog/openclaw_activity_media_state.json";
 
-    api.on("before_dispatch", async (event) => {
-      if (event.channel !== "telegram" || !/(?:^|\s)\/expense\b/i.test(event.content ?? event.body ?? "")) return;
-      const imagePath = findMediaPath(event, mediaRoot) ?? findRecentMediaPath(mediaRoot, event.timestamp);
-      if (!imagePath) return;
-      const referenceDate = new Date(event.timestamp ?? Date.now()).toLocaleDateString("en-CA", { timeZone: "America/Phoenix" });
-      if (!DATE.test(referenceDate)) return { handled: true, text: "Could not determine the upload date for this Wallet screenshot." };
-      try {
-        const output = await run(python, appDir, [
-          "import", "--image", imagePath, "--reference-date", referenceDate,
-          "--media-state-path", mediaStatePath,
-        ]);
-        return { handled: true, text: formatImport(JSON.parse(output)) };
-      } catch (error) {
-        api.logger.error(`Groundhog spending import failed: ${error.message}`);
-        return { handled: true, text: `Wallet import failed: ${error.message}` };
-      }
+    api.registerCommand({
+      name: "expense",
+      description: "Import an attached Apple Wallet transaction screenshot.",
+      acceptsArgs: false,
+      channels: ["telegram"],
+      handler: async () => {
+        const startedAt = Date.now();
+        const imagePath = findRecentMediaPath(mediaRoot, startedAt);
+        if (!imagePath) {
+          return { text: "No recent screenshot was found. Attach the Wallet screenshot and use /expense as its caption." };
+        }
+        const referenceDate = new Date(startedAt).toLocaleDateString("en-CA", { timeZone: "America/Phoenix" });
+        if (!DATE.test(referenceDate)) return { text: "Could not determine the upload date for this Wallet screenshot." };
+        try {
+          const output = await run(python, appDir, [
+            "import", "--image", imagePath, "--reference-date", referenceDate,
+            "--media-state-path", mediaStatePath,
+          ]);
+          const rows = JSON.parse(output);
+          api.logger.info(`Groundhog spending import completed: rows=${rows.length} durationMs=${Date.now() - startedAt}`);
+          return { text: formatImport(rows) };
+        } catch (error) {
+          api.logger.error(`Groundhog spending import failed: ${error.message}`);
+          return { text: `Wallet import failed: ${error.message}` };
+        }
+      },
     });
 
     api.registerCommand({
