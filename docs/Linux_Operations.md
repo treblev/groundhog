@@ -174,13 +174,12 @@ venv/bin/python -m scripts.import_openclaw_activity_media --next-kind plan
 The plan importer uses the upload's Phoenix-local date and then automatically
 returns to activity-result mode.
 
-## Apple Wallet Spending Screenshot Intake
+## Spending Screenshot Intake
 
 Install the `groundhog-spending-router` plugin from
 `deploy/openclaw/plugins/groundhog-spending-router` with `openclaw plugins install`.
-It claims only Telegram
-image attachments whose caption contains `/expense`, before the chat model runs.
-It invokes the local Apple Wallet importer, archives the screenshot under
+It registers `/expense` as a direct Telegram command that runs before the chat
+model. It invokes the local Wallet and bank transaction importer, archives the screenshot under
 Groundhog data, marks the media watcher checkpoint so it cannot be re-imported
 as an activity, and replies with imported transactions and their short IDs.
 
@@ -190,9 +189,10 @@ Correct a category later with:
 /expense-category <transaction-id> <groceries|dining|shopping|entertainment|beer|other>
 ```
 
-The importer resolves Wallet's relative date labels from the upload timestamp
-in `America/Phoenix`. It does not change the default activity/plan/sleep image
-routes.
+The importer resolves Wallet relative dates and bank calendar dates, skips
+pending charges, ignores running balances, and deduplicates matching merchant
+and amount pairs within a three-day posting window. It does not change the
+default activity/plan/sleep image routes.
 
 Install it as `openclaw`:
 

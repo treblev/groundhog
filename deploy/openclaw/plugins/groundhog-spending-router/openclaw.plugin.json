@@ -1,7 +1,7 @@
 {
   "id": "groundhog-spending-router",
   "name": "Groundhog spending router",
-  "description": "Deterministically imports Apple Wallet screenshots captioned with /expense.",
+  "description": "Deterministically imports Wallet and bank transaction screenshots captioned with /expense.",
   "activation": {
     "onStartup": true,
     "onConfigPaths": ["plugins.entries.groundhog-spending-router"]
