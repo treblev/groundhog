@@ -86,21 +86,21 @@ export default definePluginEntry({
     const mediaRoot = resolve(textFrom(config.mediaRoot) || "/home/openclaw/media/inbound");
     const mediaStatePath = textFrom(config.mediaStatePath) || "/home/openclaw/data/groundhog/openclaw_activity_media_state.json";
 
-    api.on("inbound_claim", async (event) => {
+    api.on("before_dispatch", async (event) => {
       if (event.channel !== "telegram" || !/(?:^|\s)\/expense\b/i.test(event.content ?? event.body ?? "")) return;
       const imagePath = findMediaPath(event, mediaRoot) ?? findRecentMediaPath(mediaRoot, event.timestamp);
       if (!imagePath) return;
       const referenceDate = new Date(event.timestamp ?? Date.now()).toLocaleDateString("en-CA", { timeZone: "America/Phoenix" });
-      if (!DATE.test(referenceDate)) return { handled: true, reply: { text: "Could not determine the upload date for this Wallet screenshot." } };
+      if (!DATE.test(referenceDate)) return { handled: true, text: "Could not determine the upload date for this Wallet screenshot." };
       try {
         const output = await run(python, appDir, [
           "import", "--image", imagePath, "--reference-date", referenceDate,
           "--media-state-path", mediaStatePath,
         ]);
-        return { handled: true, reply: { text: formatImport(JSON.parse(output)) } };
+        return { handled: true, text: formatImport(JSON.parse(output)) };
       } catch (error) {
         api.logger.error(`Groundhog spending import failed: ${error.message}`);
-        return { handled: true, reply: { text: `Wallet import failed: ${error.message}` } };
+        return { handled: true, text: `Wallet import failed: ${error.message}` };
       }
     });
 
