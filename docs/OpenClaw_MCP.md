@@ -4,10 +4,11 @@ OpenClaw connects to the `groundhog` stdio MCP server. Groundhog exposes local
 facts, derived retrieval results, and state; OpenClaw chooses the user-facing
 wording and delivery channel.
 
-## Semantic Workout Retrieval Architecture
+## Semantic Retrieval Architecture
 
 `search_documents` is the read-only semantic retrieval boundary for stored
-workout plans. It has one supported domain in v1: `workout`.
+workout plans and historical weekly Supertrend alerts. Its supported domains are
+`workout` and `stock_alert`.
 
 ```text
 workouts (authoritative rows)
@@ -16,6 +17,11 @@ workouts (authoritative rows)
   → semantic_chunks (derived DuckDB rows)
   → query embedding + DuckDB list_cosine_similarity
   → one best chunk per workout, ranked evidence returned to the agent
+
+stock_alerts (authoritative rows; weekly Supertrend flips only)
+  → one derived alert chunk with ticker/direction metadata
+  → local Ollama /api/embed batches → semantic_chunks
+  → query embedding + DuckDB list_cosine_similarity
 ```
 
 The derived index stores the source workout ID and date, chunk kind/index,
@@ -31,7 +37,7 @@ The index is safe to rebuild: synchronization reads source rows, calls Ollama
 outside a DuckDB write lock, then upserts only chunks whose content hash or
 embedding model changed and deletes stale chunks. Workout rows are never
 modified. Searches refresh the workout index by default; operators can also run
-`python scripts/index_semantic_documents.py [--domain workout|memory|all]` or
+`python scripts/index_semantic_documents.py [--domain workout|stock_alert|memory|all]` or
 add `--dry-run` to validate without writing.
 
 ## Direct Command Boundary
@@ -66,9 +72,12 @@ successful send response.
 
 ### `search_documents` contract
 
-Required input: `query`. Optional inputs are `domain` (currently `workout`),
+Required input: `query`. Optional inputs are `domain` (`workout` or
+`stock_alert`),
 `top_k` (1–10, default 5), inclusive `start_date` and `end_date`, exact
 case-insensitive `section`, and exact case-insensitive `structure_type`.
+Stock-alert retrieval also accepts exact case-insensitive `ticker` and
+`direction` (`bullish` or `bearish`) filters.
 
 Groundhog embeds the query with the configured local embedding model, limits
 candidate chunks to the same embedding model, applies supplied filters, and
@@ -79,10 +88,11 @@ the matching chunk/section, its text, the full authoritative workout description
 and a similarity score.
 
 Use this tool for requests by meaning, movements, equipment, format, similarity,
-or training focus. Use `get_workout_for_date` for a known date and `run_sql` for
-counts, aggregates, or structured analysis. The LangGraph system prompt enforces
-this distinction for non-date workout lookups. Do not use semantic search for
-stock prices, signals, or other structured data.
+or training focus, plus historical weekly Supertrend alerts by meaning or
+similarity. Use `get_workout_for_date` for a known date and `run_sql` for
+counts, aggregates, current stock prices, current signal state, and exact alert
+listings. The LangGraph system prompt enforces this distinction. Do not embed
+OHLCV bars or use semantic search for deterministic market calculations.
 
 ## Local LLM Boundary
 
@@ -97,3 +107,7 @@ Workout semantic search uses only local Ollama embeddings (`qwen3-embedding:0.6b
 in the current configuration). No workout text or query is sent to an external
 embedding service. Embeddings rank stored evidence; they do not create workout
 facts, schedule a workout, save a selection, or alter a plan.
+
+The same local-only boundary applies to weekly Supertrend alert retrieval. The
+canonical `stock_alerts` row supplies each derived chunk; only
+`supertrend_weekly_bullish` and `supertrend_weekly_bearish` rows are indexed.

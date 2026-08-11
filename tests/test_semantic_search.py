@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 import duckdb
@@ -8,8 +9,11 @@ import duckdb
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.semantic_search import (
+    DOMAIN_STOCK_ALERT,
     search_documents,
     split_workout_sections,
+    stock_alert_chunks,
+    sync_stock_alert_embeddings,
     sync_workout_embeddings,
     workout_chunks,
 )
@@ -23,6 +27,19 @@ def fake_embedder(texts: list[str]) -> list[list[float]]:
         if "sled" in lowered or "rowing and lower body" in lowered:
             vectors.append([1.0, 0.0, 0.0])
         elif "yoga" in lowered:
+            vectors.append([0.0, 1.0, 0.0])
+        else:
+            vectors.append([0.0, 0.0, 1.0])
+    return vectors
+
+
+def fake_stock_alert_embedder(texts: list[str]) -> list[list[float]]:
+    vectors = []
+    for text in texts:
+        lowered = text.lower()
+        if "bullish" in lowered:
+            vectors.append([1.0, 0.0, 0.0])
+        elif "bearish" in lowered:
             vectors.append([0.0, 1.0, 0.0])
         else:
             vectors.append([0.0, 0.0, 1.0])
@@ -77,6 +94,20 @@ class SemanticIndexTests(unittest.TestCase):
                      'Fitness\nDB squats\n\nHYROX (1 pm)\nSled push and rower'),
                     ('yoga-plan', NULL, NULL, 'Recovery Yoga', 'Recovery', NULL,
                      'Yoga mobility and breathing')
+                """
+            )
+            con.execute(
+                """
+                INSERT INTO stock_alerts (id, date, ticker, alert_type, message)
+                VALUES
+                    ('alpha-weekly-bull', '2026-08-01', 'ALPHA', 'supertrend_weekly_bullish',
+                     'ALPHA: Supertrend (weekly) flipped BULLISH (BUY signal)'),
+                    ('beta-weekly-bear', '2026-08-08', 'BETA', 'supertrend_weekly_bearish',
+                     'BETA: Supertrend (weekly) flipped BEARISH (SELL signal)'),
+                    ('gamma-daily-bull', '2026-08-09', 'GAMMA', 'supertrend_daily_bullish',
+                     'GAMMA: Supertrend (daily) flipped BULLISH (BUY signal)'),
+                    ('alpha-sma', '2026-08-09', 'ALPHA', 'golden_cross',
+                     'ALPHA: Golden Cross — SMA50 crossed above SMA200 (BUY signal)')
                 """
             )
         finally:
@@ -153,6 +184,74 @@ class SemanticIndexTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["source_id"], "sled-plan")
         self.assertEqual(results[0]["match_kind"], "section")
+
+    def test_stock_alert_chunks_include_only_weekly_supertrend_rows(self):
+        self.assertEqual(stock_alert_chunks({
+            "id": "daily", "date": date(2026, 8, 9), "ticker": "GAMMA",
+            "alert_type": "supertrend_daily_bullish", "message": "daily alert",
+        }), [])
+
+        first = sync_stock_alert_embeddings(
+            self.db_path, embedder=fake_stock_alert_embedder
+        )
+        second = sync_stock_alert_embeddings(
+            self.db_path, embedder=fake_stock_alert_embedder
+        )
+
+        self.assertEqual(first["sources"], 2)
+        self.assertEqual(first["chunks"], 2)
+        self.assertEqual(first["embedded"], 2)
+        self.assertEqual(second["embedded"], 0)
+        con = duckdb.connect(str(self.db_path))
+        try:
+            con.execute(
+                "UPDATE stock_alerts SET message = ? WHERE id = ?",
+                ["ALPHA: revised weekly bullish Supertrend alert", "alpha-weekly-bull"],
+            )
+        finally:
+            con.close()
+        changed = sync_stock_alert_embeddings(
+            self.db_path, embedder=fake_stock_alert_embedder
+        )
+        self.assertEqual(changed["embedded"], 1)
+        con = duckdb.connect(str(self.db_path), read_only=True)
+        try:
+            rows = con.execute(
+                "SELECT source_id FROM semantic_chunks WHERE domain = ? ORDER BY source_id",
+                [DOMAIN_STOCK_ALERT],
+            ).fetchall()
+        finally:
+            con.close()
+        self.assertEqual(rows, [("alpha-weekly-bull",), ("beta-weekly-bear",)])
+        con = duckdb.connect(str(self.db_path))
+        try:
+            con.execute("DELETE FROM stock_alerts WHERE id = ?", ["beta-weekly-bear"])
+        finally:
+            con.close()
+        removed = sync_stock_alert_embeddings(
+            self.db_path, embedder=fake_stock_alert_embedder
+        )
+        self.assertEqual(removed["deleted"], 1)
+
+    def test_stock_alert_search_applies_ticker_direction_and_date_filters(self):
+        sync_stock_alert_embeddings(self.db_path, embedder=fake_stock_alert_embedder)
+        results = search_documents(
+            "weekly bullish trend",
+            domain=DOMAIN_STOCK_ALERT,
+            ticker="alpha",
+            direction="bullish",
+            start_date="2026-08-01",
+            end_date="2026-08-01",
+            db_path=self.db_path,
+            embedder=fake_stock_alert_embedder,
+            sync=False,
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["source_id"], "alpha-weekly-bull")
+        self.assertEqual(results[0]["ticker"], "ALPHA")
+        self.assertEqual(results[0]["direction"], "bullish")
+        self.assertEqual(results[0]["alert_type"], "supertrend_weekly_bullish")
 
 
 if __name__ == "__main__":

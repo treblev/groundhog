@@ -68,20 +68,22 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="search_documents",
             description=(
-                "Required for non-date workout lookup: search stored workout plans by meaning, "
-                "movements, equipment, format, or similarity. Use get_workout_for_date only for "
-                "an exact date and run_sql only for counts or aggregates."
+                "Search stored workout plans or historical weekly Supertrend alerts by meaning or "
+                "similarity. Use domain='workout' for non-date workout lookup and domain='stock_alert' "
+                "for historical weekly flips; use structured tools for exact dates, counts, and market facts."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Natural-language semantic search query."},
-                    "domain": {"type": "string", "enum": ["workout"], "default": "workout"},
+                    "domain": {"type": "string", "enum": ["workout", "stock_alert"], "default": "workout"},
                     "top_k": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
                     "start_date": {"type": "string", "description": "Optional inclusive YYYY-MM-DD lower bound."},
                     "end_date": {"type": "string", "description": "Optional inclusive YYYY-MM-DD upper bound."},
                     "section": {"type": "string", "description": "Optional track filter, such as Fitness, HYROX, Tread, Row, or Floor."},
                     "structure_type": {"type": "string", "description": "Optional exact workout structure filter."},
+                    "ticker": {"type": "string", "description": "Optional exact ticker filter for stock-alert retrieval."},
+                    "direction": {"type": "string", "enum": ["bullish", "bearish"], "description": "Optional weekly Supertrend direction filter."},
                 },
                 "required": ["query"],
             },
@@ -197,6 +199,8 @@ def _dispatch(
             end_date=args.get("end_date"),
             section=args.get("section"),
             structure_type=args.get("structure_type"),
+            ticker=args.get("ticker"),
+            direction=args.get("direction"),
             db_path=db_path,
         )
         return json.dumps(results, default=_json_default)

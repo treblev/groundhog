@@ -254,8 +254,10 @@ def _make_tools(session: ClientSession) -> list:
         end_date: str | None = None,
         section: str | None = None,
         structure_type: str | None = None,
+        ticker: str | None = None,
+        direction: str | None = None,
     ) -> str:
-        """Required for non-date workout lookup; search plans by meaning, movements, equipment, format, or similarity."""
+        """Search workout plans or historical weekly Supertrend alerts by meaning or similarity."""
         arguments = {
             key: value
             for key, value in {
@@ -266,6 +268,8 @@ def _make_tools(session: ClientSession) -> list:
                 "end_date": end_date,
                 "section": section,
                 "structure_type": structure_type,
+                "ticker": ticker,
+                "direction": direction,
             }.items()
             if value is not None
         }
@@ -351,7 +355,9 @@ def _system_prompt(schema: str) -> str:
         "training focus, recommendations, and requests for the best matching stored workout. "
         "Do not substitute run_sql for semantic workout retrieval. "
         "Use get_workout_for_date for exact dates and run_sql for counts or structured analysis. "
-        "Stock prices and signals are structured data and must use database tools, not semantic search.\n"
+        "For historical weekly Supertrend alert requests by meaning or similarity, "
+        "call search_documents with domain='stock_alert'. Use database tools for current stock prices, "
+        "signal state, exact alert listings, counts, and aggregates.\n"
         "NEVER call remember() unless the user explicitly says 'remember' or 'save'.\n"
         "Call recall() ONLY for questions about personal opinions, preferences, or stated beliefs.\n"
         f"\nDatabase schema:\n{schema}"

@@ -16,8 +16,14 @@ from agent.embeddings import embed_texts
 from config.settings import DB_PATH, OLLAMA_EMBEDDING_MODEL
 
 DOMAIN_WORKOUT = "workout"
+DOMAIN_STOCK_ALERT = "stock_alert"
+SUPPORTED_DOMAINS = {DOMAIN_WORKOUT, DOMAIN_STOCK_ALERT}
 BATCH_SIZE = 32
 MAX_RESULTS = 10
+_WEEKLY_SUPERTREND_ALERT_TYPES = {
+    "supertrend_weekly_bullish",
+    "supertrend_weekly_bearish",
+}
 
 _SECTION_HEADING_RE = re.compile(
     r"^(?:fitness(?:\s*\+\s*performance)?|performance|hyrox\b.*|"
@@ -190,6 +196,70 @@ def _workouts(con: duckdb.DuckDBPyConnection) -> list[dict]:
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
+def _weekly_supertrend_alerts(con: duckdb.DuckDBPyConnection) -> list[dict]:
+    cursor = con.execute(
+        """
+        SELECT id, date, ticker, alert_type, message
+        FROM stock_alerts
+        WHERE alert_type IN (?, ?)
+        ORDER BY date, id
+        """,
+        sorted(_WEEKLY_SUPERTREND_ALERT_TYPES),
+    )
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def stock_alert_chunks(alert: dict) -> list[dict]:
+    """Create one derived chunk for a weekly Supertrend alert."""
+    alert_type = alert["alert_type"]
+    if alert_type not in _WEEKLY_SUPERTREND_ALERT_TYPES:
+        return []
+    direction = alert_type.rsplit("_", 1)[1]
+    ticker = alert["ticker"]
+    message = (alert.get("message") or "").strip()
+    if not message:
+        return []
+    metadata = {
+        "ticker": ticker,
+        "direction": direction,
+        "alert_type": alert_type,
+        "timeframe": "weekly",
+    }
+    embedding_input = "\n".join(
+        [
+            "Document type: stock alert",
+            f"Ticker: {ticker}",
+            "Signal: Supertrend",
+            "Timeframe: weekly",
+            f"Direction: {direction}",
+            f"Alert: {message}",
+        ]
+    )
+    chunk_key = f"{DOMAIN_STOCK_ALERT}|{alert['id']}|alert|0"
+    hash_input = json.dumps(
+        {"embedding_input": embedding_input, "metadata": metadata},
+        sort_keys=True,
+        default=str,
+    )
+    return [
+        {
+            "id": _hash(chunk_key)[:32],
+            "domain": DOMAIN_STOCK_ALERT,
+            "source_id": alert["id"],
+            "source_date": alert.get("date"),
+            "chunk_kind": "alert",
+            "chunk_index": 0,
+            "section_label": None,
+            "title": f"{ticker} weekly Supertrend {direction}",
+            "content": message,
+            "metadata": json.dumps(metadata, sort_keys=True),
+            "content_hash": _hash(hash_input),
+            "embedding_input": embedding_input,
+        }
+    ]
+
+
 def sync_workout_embeddings(
     db_path: Path | str = DB_PATH,
     embedder: Callable[[list[str]], list[list[float]]] = embed_texts,
@@ -197,23 +267,61 @@ def sync_workout_embeddings(
     dry_run: bool = False,
 ) -> dict:
     """Idempotently index every workout, with model calls outside DB locks."""
-    if batch_size < 1:
-        raise ValueError("batch_size must be at least 1")
-
     con = duckdb.connect(str(db_path), read_only=True)
     try:
         desired = [chunk for workout in _workouts(con) for chunk in workout_chunks(workout)]
-        existing_rows = []
-        if not dry_run:
+    finally:
+        con.close()
+    return _sync_chunks(
+        DOMAIN_WORKOUT, desired, db_path, embedder, batch_size, dry_run
+    )
+
+
+def sync_stock_alert_embeddings(
+    db_path: Path | str = DB_PATH,
+    embedder: Callable[[list[str]], list[list[float]]] = embed_texts,
+    batch_size: int = BATCH_SIZE,
+    dry_run: bool = False,
+) -> dict:
+    """Idempotently index weekly Supertrend alerts outside DB write locks."""
+    con = duckdb.connect(str(db_path), read_only=True)
+    try:
+        desired = [
+            chunk
+            for alert in _weekly_supertrend_alerts(con)
+            for chunk in stock_alert_chunks(alert)
+        ]
+    finally:
+        con.close()
+    return _sync_chunks(
+        DOMAIN_STOCK_ALERT, desired, db_path, embedder, batch_size, dry_run
+    )
+
+
+def _sync_chunks(
+    domain: str,
+    desired: list[dict],
+    db_path: Path | str,
+    embedder: Callable[[list[str]], list[list[float]]],
+    batch_size: int,
+    dry_run: bool,
+) -> dict:
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+
+    existing_rows = []
+    if not dry_run:
+        con = duckdb.connect(str(db_path), read_only=True)
+        try:
             existing_rows = con.execute(
                 """
                 SELECT id, content_hash, embedding_model
                 FROM semantic_chunks WHERE domain = ?
                 """,
-                [DOMAIN_WORKOUT],
+                [domain],
             ).fetchall()
-    finally:
-        con.close()
+        finally:
+            con.close()
 
     existing = {row[0]: (row[1], row[2]) for row in existing_rows}
     pending = [
@@ -318,18 +426,23 @@ def search_documents(
     end_date: str | date | None = None,
     section: str | None = None,
     structure_type: str | None = None,
+    ticker: str | None = None,
+    direction: str | None = None,
     db_path: Path | str = DB_PATH,
     embedder: Callable[[list[str]], list[list[float]]] = embed_texts,
     sync: bool = True,
 ) -> list[dict]:
-    """Search semantic chunks and return one best match per source workout."""
-    if domain != DOMAIN_WORKOUT:
+    """Search semantic chunks and return grounded evidence for one domain."""
+    if domain not in SUPPORTED_DOMAINS:
         raise ValueError(f"Unsupported semantic-search domain: {domain}")
     if not query.strip():
         raise ValueError("query must not be empty")
     limit = max(1, min(int(top_k), MAX_RESULTS))
     if sync:
-        sync_workout_embeddings(db_path, embedder=embedder)
+        if domain == DOMAIN_WORKOUT:
+            sync_workout_embeddings(db_path, embedder=embedder)
+        else:
+            sync_stock_alert_embeddings(db_path, embedder=embedder)
     query_vector = embedder([query])[0]
 
     clauses = ["c.domain = ?", "c.embedding_model = ?"]
@@ -346,12 +459,19 @@ def search_documents(
     if structure_type:
         clauses.append("lower(json_extract_string(c.metadata, '$.structure_type')) = lower(?)")
         parameters.append(structure_type)
+    if ticker:
+        clauses.append("lower(json_extract_string(c.metadata, '$.ticker')) = lower(?)")
+        parameters.append(ticker)
+    if direction:
+        clauses.append("lower(json_extract_string(c.metadata, '$.direction')) = lower(?)")
+        parameters.append(direction)
     parameters.append(limit)
 
     con = duckdb.connect(str(db_path), read_only=True)
     try:
-        cursor = con.execute(
-            f"""
+        if domain == DOMAIN_WORKOUT:
+            cursor = con.execute(
+                f"""
             WITH scored AS (
                 SELECT c.*,
                        list_cosine_similarity(c.embedding, ?) AS score
@@ -374,8 +494,28 @@ def search_documents(
             ORDER BY r.score DESC
             LIMIT ?
             """,
-            parameters,
-        )
+                parameters,
+            )
+        else:
+            cursor = con.execute(
+                f"""
+                WITH scored AS (
+                    SELECT c.*, list_cosine_similarity(c.embedding, ?) AS score
+                    FROM semantic_chunks c
+                    WHERE {' AND '.join(clauses)}
+                )
+                SELECT c.source_id, c.source_date AS date,
+                       json_extract_string(c.metadata, '$.ticker') AS ticker,
+                       json_extract_string(c.metadata, '$.direction') AS direction,
+                       json_extract_string(c.metadata, '$.alert_type') AS alert_type,
+                       a.message, c.score
+                FROM scored c
+                JOIN stock_alerts a ON a.id = c.source_id
+                ORDER BY c.score DESC
+                LIMIT ?
+                """,
+                parameters,
+            )
         columns = [column[0] for column in cursor.description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
     finally:

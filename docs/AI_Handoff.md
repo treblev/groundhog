@@ -28,7 +28,7 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 - **Ingestion**: yfinance (stocks), fitness activity screenshots via vision LLM → `activities`, SugarWOD plan screenshots → `workouts`, Sleep8 screenshots → `sleep_metrics`, and Wallet/bank transaction-list screenshots → `spending`
 - **Analytics**: SMA50/200 crossover, Supertrend (daily + weekly) → `stock_signals` → `stock_alerts`
 - **Agent**: MCP tool server (stdio JSON-RPC) + LangGraph client (`create_agent()`), replacing the hand-rolled loop
-- **Semantic retrieval**: `search_documents` indexes and ranks stored workout plans locally. It is required for a non-date workout lookup; exact-date retrieval stays on `get_workout_for_date` and structured counts/aggregates stay on `run_sql`.
+- **Semantic retrieval**: `search_documents` indexes and ranks stored workout plans plus weekly Supertrend alert history locally. It is required for a non-date workout lookup and semantic historical-alert lookup; exact-date retrieval, current market facts, and structured counts/aggregates stay on MCP data tools or `run_sql`.
 - **Direct commands**: OpenClaw's `groundhog-spending-router` handles `/expense` and `/expense-category` before agent dispatch; it calls `ingestion.spending` directly
 - **Scheduling**: OpenClaw cron under `openclaw` (daily stocks: 5 PM America/Phoenix, weekdays)
 - **AI**: Ollama local only. `qwen3.6:latest` for SQL/text, `qwen3-vl:latest` for vision, `qwen3-embedding:0.6b` for memory and semantic-search embeddings. No external API calls with personal data.
@@ -62,7 +62,8 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 | `scripts/openclaw_deliver_outbox.py` | OpenClaw-side delivery bridge: Groundhog MCP outbox → OpenClaw Telegram → mark delivered on success. |
 | `scripts/import_openclaw_activity_media.py` | Deterministic OpenClaw media watcher. Checkpoints old files, imports each new attachment once, and has one-shot `--next-kind plan` routing. |
 | `scripts/update_watchlist.py` | Scrapes Nasdaq-100 from Wikipedia, merges into watchlist.txt. |
-| `scripts/index_semantic_documents.py` | Manual/dry-run refresh entry point for local workout and memory embeddings. |
+| `scripts/index_semantic_documents.py` | Manual/dry-run refresh entry point for local workout, weekly-alert, and memory embeddings. |
+| `docs/Stock_Alert_Semantic_Search.md` | Design and operating boundary for semantic retrieval of weekly Supertrend alert history. |
 | `deploy/systemd/user/groundhog-stocks.service` | systemd user service retained as a manual fallback for the daily stock pipeline. |
 | `deploy/systemd/user/groundhog-stocks.timer` | Legacy systemd timer; disabled in production because OpenClaw cron owns the weekday 5pm Phoenix schedule. |
 | `deploy/systemd/user/groundhog-daemon.service` | Optional always-on daemon service; do not enable alongside the timer. |
@@ -99,7 +100,7 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 - **Weekly Supertrend**: resample daily OHLCV to weekly with `resample("W-FRI")` — do not fetch weekly bars from yfinance
 - **Hash-based workout IDs**: `SHA256(date|name|description[:50])[:16]` for safe re-runs
 - **Workout semantic index is derived, local, and versioned**: index one whole-plan chunk plus recognized Fitness, Performance, HYROX, Tread, Row, and Floor sections. Store source metadata, content hashes, model name, and vectors in `semantic_chunks`; refresh changed/model-mismatched chunks and delete stale chunks. `workouts` remains the source of truth.
-- **Semantic retrieval is for unstructured workout intent only**: `search_documents` embeds a query locally, uses DuckDB cosine similarity, and returns the best matching chunk per workout. Do not use it for exact-date workout retrieval, aggregates, or stocks.
+- **Semantic retrieval is for workout intent and weekly Supertrend alert history**: `search_documents` embeds a query locally and uses DuckDB cosine similarity. Workout search returns the best chunk per workout; stock-alert search returns qualifying weekly bullish/bearish flips and accepts ticker, direction, and date filters. Do not use it for exact-date workout retrieval, current stock facts, aggregates, OHLCV bars, or signal-state queries.
 - **Telegram screenshots are deterministic**: do not rely on the OpenClaw chat model to interpret an image. `groundhog-openclaw-media.timer` scans `/home/openclaw/media/inbound` once per minute and calls the local `qwen3-vl:latest` importer.
 - **Spending uses a registered command, not model routing**: `/expense` is owned by the OpenClaw spending plugin and directly invokes `python -m ingestion.spending`. This prevents generic chat responses and repeated tool-selection attempts.
 - **Spending dates come from the transaction row**: explicit bank dates are parsed directly; relative Wallet labels are resolved against the Phoenix-local upload date.
@@ -147,6 +148,7 @@ python -m ingestion.spending import --image <path> --reference-date YYYY-MM-DD
 # chunks automatically, so this is primarily useful after a bulk import or for checks.
 python scripts/index_semantic_documents.py
 python scripts/index_semantic_documents.py --domain all
+python scripts/index_semantic_documents.py --domain stock_alert
 python scripts/index_semantic_documents.py --dry-run
 
 # Analytics
@@ -214,7 +216,8 @@ stock_alerts         -- id, date, ticker, alert_type, message, notified_at
 sleep_metrics        -- date, resting_hr, hrv, breath_rate,
                      --   time_to_fall_asleep_minutes (nullable), deep_sleep_minutes (nullable)
 workouts             -- id, date, day_of_week, name, category, structure_type, description
-semantic_chunks      -- derived local vector index: id, domain, source_id, source_date,
+semantic_chunks      -- derived local vector index: workout chunks and weekly Supertrend alerts;
+                     -- id, domain, source_id, source_date,
                      -- chunk_kind/index, section_label, title, content, metadata,
                      -- content_hash, embedding_model, embedding, timestamps
 reminders            -- SCD Type 2: valid_from, valid_to, is_current
@@ -296,6 +299,7 @@ In order (most recent last):
 - Added Wallet and bank transaction-list vision ingestion, the `spending` table, pending-row filtering, date parsing, image and cross-screenshot deduplication, and source-image archiving
 - Added fixed merchant categorization so Circle K spending is always classified as `beer`
 - Added local workout semantic search: Ollama embeddings, idempotent DuckDB chunk index, semantic MCP tool, query filters, and LangGraph guidance requiring it for non-date workout requests
+- Added local semantic retrieval for historical weekly Supertrend alerts, derived from `stock_alerts` with ticker, direction, and date filters; prices and current signal state remain structured queries
 
 ---
 
