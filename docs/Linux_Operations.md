@@ -218,6 +218,26 @@ venv/bin/python -c "import duckdb; from config.settings import DB_PATH; con=duck
 venv/bin/python -m unittest tests.test_spending_ingestion
 ```
 
+## Ticker Semantic Notes
+
+The `groundhog-stock-notes-router` plugin provides direct Telegram writes for
+user-authored ticker research notes. It is separate from the stock alert system:
+notes are canonical, revisioned context; their Ollama embeddings are derived.
+
+Install and verify it as `openclaw` after deploying the feature branch:
+
+```bash
+cd /home/openclaw/apps/groundhog
+openclaw plugins install /home/openclaw/apps/groundhog/deploy/openclaw/plugins/groundhog-stock-notes-router
+openclaw plugins enable groundhog-stock-notes-router
+systemctl --user restart openclaw-gateway.service
+openclaw plugins inspect groundhog-stock-notes-router --runtime --json
+```
+
+Runtime inspection must show `status: loaded`, commands `stocks-add-notes`,
+`stocks-edit-notes`, `stocks-delete-notes`, and `stocks-notes`, and no
+diagnostics. See `docs/Stock_Semantic_Notes.md` for commands and retrieval.
+
 ## OpenClaw Stock Schedule
 
 OpenClaw is the production scheduler for weekday stock jobs. The deployed job

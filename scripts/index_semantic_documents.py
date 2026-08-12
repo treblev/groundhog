@@ -10,8 +10,10 @@ import json
 from agent.memory import sync_memory_embeddings
 from agent.semantic_search import (
     DOMAIN_STOCK_ALERT,
+    DOMAIN_STOCK_NOTE,
     DOMAIN_WORKOUT,
     sync_stock_alert_embeddings,
+    sync_stock_note_embeddings,
     sync_workout_embeddings,
 )
 
@@ -23,7 +25,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--domain",
-        choices=[DOMAIN_WORKOUT, DOMAIN_STOCK_ALERT, DOMAIN_MEMORY, DOMAIN_ALL],
+        choices=[DOMAIN_WORKOUT, DOMAIN_STOCK_ALERT, DOMAIN_STOCK_NOTE, DOMAIN_MEMORY, DOMAIN_ALL],
         default=DOMAIN_WORKOUT,
     )
     parser.add_argument(
@@ -38,6 +40,8 @@ def main() -> int:
         results[DOMAIN_WORKOUT] = sync_workout_embeddings(dry_run=args.dry_run)
     if args.domain in {DOMAIN_STOCK_ALERT, DOMAIN_ALL}:
         results[DOMAIN_STOCK_ALERT] = sync_stock_alert_embeddings(dry_run=args.dry_run)
+    if args.domain in {DOMAIN_STOCK_NOTE, DOMAIN_ALL}:
+        results[DOMAIN_STOCK_NOTE] = sync_stock_note_embeddings(dry_run=args.dry_run)
     if args.domain in {DOMAIN_MEMORY, DOMAIN_ALL}:
         results[DOMAIN_MEMORY] = sync_memory_embeddings(dry_run=args.dry_run)
     output = results[args.domain] if args.domain != DOMAIN_ALL else results

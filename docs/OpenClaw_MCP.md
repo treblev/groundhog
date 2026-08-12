@@ -7,8 +7,8 @@ wording and delivery channel.
 ## Semantic Retrieval Architecture
 
 `search_documents` is the read-only semantic retrieval boundary for stored
-workout plans and historical weekly Supertrend alerts. Its supported domains are
-`workout` and `stock_alert`.
+workout plans, historical weekly Supertrend alerts, and user-authored ticker notes. Its supported domains are
+`workout`, `stock_alert`, and `stock_note`.
 
 ```text
 workouts (authoritative rows)
@@ -20,6 +20,9 @@ workouts (authoritative rows)
 
 stock_alerts (authoritative rows; weekly Supertrend flips only)
   → one derived alert chunk with ticker/direction metadata
+  → local Ollama /api/embed batches → semantic_chunks
+
+stock_notes (authoritative active user-authored ticker notes)
   → local Ollama /api/embed batches → semantic_chunks
   → query embedding + DuckDB list_cosine_similarity
 ```
@@ -37,24 +40,26 @@ The index is safe to rebuild: synchronization reads source rows, calls Ollama
 outside a DuckDB write lock, then upserts only chunks whose content hash or
 embedding model changed and deletes stale chunks. Workout rows are never
 modified. Searches refresh the workout index by default; operators can also run
-`python scripts/index_semantic_documents.py [--domain workout|stock_alert|memory|all]` or
+`python scripts/index_semantic_documents.py [--domain workout|stock_alert|stock_note|memory|all]` or
 add `--dry-run` to validate without writing.
 
 ## Direct Command Boundary
 
-Spending screenshot ingestion does not use MCP. The registered OpenClaw
+Spending screenshot ingestion and ticker-note writes do not use MCP. The registered OpenClaw
 commands `/expense` and `/expense-category` are provided by
 `deploy/openclaw/plugins/groundhog-spending-router` and invoke
 `ingestion.spending` directly. This deterministic route prevents the chat model
 from treating an expense upload as a general image question or repeatedly
 deciding whether to call a tool. Do not add an overlapping spending-write MCP
-tool unless the direct-command design is intentionally replaced.
+tool unless the direct-command design is intentionally replaced. The
+`groundhog-stock-notes-router` plugin similarly owns `/stocks-add-notes`,
+`/stocks-edit-notes`, `/stocks-delete-notes`, and `/stocks-notes`.
 
 ## Service Tool Contract
 
 | Tool | Input | Result | Ownership |
 | --- | --- | --- | --- |
-| `search_documents` | semantic query, workout domain, optional result/date/section/structure filters | JSON list of ranked workout-plan evidence | Groundhog refreshes its derived local index and reads workout facts |
+| `search_documents` | semantic query, domain, optional filters | JSON list of ranked semantic evidence | Groundhog refreshes its derived local index and reads canonical facts |
 | `get_recent_events` | optional `limit` | JSON list of durable events | Groundhog reads facts |
 | `get_pending_outbox` | optional `limit` | JSON list of pending delivery items and source event data | Groundhog exposes pending facts |
 | `get_agent_run_status` | none | JSON list with the most recent job run | Groundhog exposes job health |
@@ -72,12 +77,12 @@ successful send response.
 
 ### `search_documents` contract
 
-Required input: `query`. Optional inputs are `domain` (`workout` or
-`stock_alert`),
+Required input: `query`. Optional inputs are `domain` (`workout`,
+`stock_alert`, or `stock_note`),
 `top_k` (1–10, default 5), inclusive `start_date` and `end_date`, exact
 case-insensitive `section`, and exact case-insensitive `structure_type`.
-Stock-alert retrieval also accepts exact case-insensitive `ticker` and
-`direction` (`bullish` or `bearish`) filters.
+Stock-alert retrieval accepts exact case-insensitive `ticker` and `direction`
+(`bullish` or `bearish`) filters. Ticker-note retrieval accepts `ticker`.
 
 Groundhog embeds the query with the configured local embedding model, limits
 candidate chunks to the same embedding model, applies supplied filters, and
@@ -88,11 +93,11 @@ the matching chunk/section, its text, the full authoritative workout description
 and a similarity score.
 
 Use this tool for requests by meaning, movements, equipment, format, similarity,
-or training focus, plus historical weekly Supertrend alerts by meaning or
-similarity. Use `get_workout_for_date` for a known date and `run_sql` for
-counts, aggregates, current stock prices, current signal state, and exact alert
-listings. The LangGraph system prompt enforces this distinction. Do not embed
-OHLCV bars or use semantic search for deterministic market calculations.
+or training focus, plus historical weekly Supertrend alerts and ticker notes by
+meaning or similarity. Use `get_workout_for_date` for a known date and `run_sql`
+for counts, aggregates, current stock prices, current signal state, and exact
+alert or note listings. The LangGraph system prompt enforces this distinction.
+Do not embed OHLCV bars or use semantic search for deterministic market calculations.
 
 ## Local LLM Boundary
 
@@ -108,6 +113,7 @@ in the current configuration). No workout text or query is sent to an external
 embedding service. Embeddings rank stored evidence; they do not create workout
 facts, schedule a workout, save a selection, or alter a plan.
 
-The same local-only boundary applies to weekly Supertrend alert retrieval. The
-canonical `stock_alerts` row supplies each derived chunk; only
-`supertrend_weekly_bullish` and `supertrend_weekly_bearish` rows are indexed.
+The same local-only boundary applies to stock retrieval. Qualifying canonical
+`stock_alerts` rows and active canonical `stock_notes` rows each supply their
+own derived chunks. Only `supertrend_weekly_bullish` and
+`supertrend_weekly_bearish` alert rows are indexed.

@@ -1,0 +1,17 @@
+{
+  "id": "groundhog-stock-notes-router",
+  "name": "Groundhog stock notes router",
+  "description": "Deterministically manages user-authored semantic notes for stock tickers.",
+  "activation": {
+    "onStartup": true,
+    "onConfigPaths": ["plugins.entries.groundhog-stock-notes-router"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "appDir": {"type": "string"},
+      "python": {"type": "string"}
+    }
+  }
+}

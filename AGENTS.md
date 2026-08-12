@@ -129,6 +129,16 @@ No linter configured.
 - **Spending**: run `python -m unittest tests.test_spending_ingestion`; verify `/expense` imports posted rows and `/expense-category` updates one short transaction ID
 - **Anything touching Supertrend**: spot-check AAPL or MSFT direction against TradingView Supertrend (period=10, multiplier=3)
 
+## Issue Tracking
+
+- GitHub Issues is the durable backlog for features and bugs. Keep `TODO.md` only for temporary local notes that are not ready to become issues.
+- Use the project GitHub MCP server for issue and pull-request operations. Fall back to `gh` only when MCP is unavailable.
+- Before creating an issue, search open and closed issues for duplicates. Include the problem or outcome, relevant context, acceptance criteria, and verification notes.
+- Use `[Feature]` or `[Bug]` at the start of an issue title when an equivalent repository label is not available.
+- Read the relevant issue before starting issue-backed work. Update or close it only after the requested change is verified, and link the pull request or commit when one exists.
+- Never put personal health, sleep, workout, spending, account, portfolio, screenshot, database, log, token, or secret data in GitHub issues, comments, or pull requests. Describe behavior using sanitized examples only.
+- Creating, editing, commenting on, or closing an issue is an external write. Do it only when the user asks to track or update the work; MCP write tools are configured to request approval.
+
 ## Communication
 
 - Explain issues directly and concisely. State what happened, why it happened, and what changed. Avoid jargon, unnecessary implementation detail, and restating prior context.

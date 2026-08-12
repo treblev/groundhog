@@ -145,6 +145,20 @@ class McpServiceToolTests(unittest.TestCase):
         self.assertEqual(search.call_args.kwargs["ticker"], "TEST")
         self.assertEqual(search.call_args.kwargs["direction"], "bearish")
 
+    def test_semantic_stock_note_search_forwards_ticker(self):
+        matches = [{"source_id": "note-1", "ticker": "SHOP", "score": 0.91}]
+        with patch.object(server, "search_documents", return_value=matches) as search:
+            result = json.loads(
+                self._dispatch(
+                    "search_documents",
+                    {"query": "bullish bicycle activation", "domain": "stock_note", "ticker": "SHOP"},
+                )
+            )
+
+        self.assertEqual(result, matches)
+        self.assertEqual(search.call_args.kwargs["domain"], "stock_note")
+        self.assertEqual(search.call_args.kwargs["ticker"], "SHOP")
+
 
 if __name__ == "__main__":
     unittest.main()

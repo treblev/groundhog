@@ -17,7 +17,8 @@ from config.settings import DB_PATH, OLLAMA_EMBEDDING_MODEL
 
 DOMAIN_WORKOUT = "workout"
 DOMAIN_STOCK_ALERT = "stock_alert"
-SUPPORTED_DOMAINS = {DOMAIN_WORKOUT, DOMAIN_STOCK_ALERT}
+DOMAIN_STOCK_NOTE = "stock_note"
+SUPPORTED_DOMAINS = {DOMAIN_WORKOUT, DOMAIN_STOCK_ALERT, DOMAIN_STOCK_NOTE}
 BATCH_SIZE = 32
 MAX_RESULTS = 10
 _WEEKLY_SUPERTREND_ALERT_TYPES = {
@@ -260,6 +261,56 @@ def stock_alert_chunks(alert: dict) -> list[dict]:
     ]
 
 
+def _stock_notes(con: duckdb.DuckDBPyConnection) -> list[dict]:
+    cursor = con.execute(
+        """
+        SELECT id, ticker, note, created_at, updated_at
+        FROM stock_notes
+        WHERE NOT is_deleted
+        ORDER BY created_at, id
+        """
+    )
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def stock_note_chunks(note: dict) -> list[dict]:
+    """Create one derived chunk for a user-authored ticker note."""
+    content = (note.get("note") or "").strip()
+    ticker = (note.get("ticker") or "").upper()
+    if not content or not ticker:
+        return []
+    metadata = {"ticker": ticker, "source": "user_note"}
+    embedding_input = "\n".join(
+        [
+            "Document type: user stock note",
+            f"Ticker: {ticker}",
+            f"Note: {content}",
+        ]
+    )
+    chunk_key = f"{DOMAIN_STOCK_NOTE}|{note['id']}|note|0"
+    hash_input = json.dumps(
+        {"embedding_input": embedding_input, "metadata": metadata},
+        sort_keys=True,
+    )
+    return [
+        {
+            "id": _hash(chunk_key)[:32],
+            "domain": DOMAIN_STOCK_NOTE,
+            "source_id": note["id"],
+            "source_date": note.get("updated_at"),
+            "chunk_kind": "note",
+            "chunk_index": 0,
+            "section_label": None,
+            "title": f"{ticker} note",
+            "content": content,
+            "metadata": json.dumps(metadata, sort_keys=True),
+            "content_hash": _hash(hash_input),
+            "embedding_input": embedding_input,
+        }
+    ]
+
+
 def sync_workout_embeddings(
     db_path: Path | str = DB_PATH,
     embedder: Callable[[list[str]], list[list[float]]] = embed_texts,
@@ -296,6 +347,21 @@ def sync_stock_alert_embeddings(
     return _sync_chunks(
         DOMAIN_STOCK_ALERT, desired, db_path, embedder, batch_size, dry_run
     )
+
+
+def sync_stock_note_embeddings(
+    db_path: Path | str = DB_PATH,
+    embedder: Callable[[list[str]], list[list[float]]] = embed_texts,
+    batch_size: int = BATCH_SIZE,
+    dry_run: bool = False,
+) -> dict:
+    """Idempotently index active user-authored ticker notes."""
+    con = duckdb.connect(str(db_path), read_only=True)
+    try:
+        desired = [chunk for note in _stock_notes(con) for chunk in stock_note_chunks(note)]
+    finally:
+        con.close()
+    return _sync_chunks(DOMAIN_STOCK_NOTE, desired, db_path, embedder, batch_size, dry_run)
 
 
 def _sync_chunks(
@@ -441,17 +507,20 @@ def search_documents(
     if sync:
         if domain == DOMAIN_WORKOUT:
             sync_workout_embeddings(db_path, embedder=embedder)
-        else:
+        elif domain == DOMAIN_STOCK_ALERT:
             sync_stock_alert_embeddings(db_path, embedder=embedder)
+        else:
+            sync_stock_note_embeddings(db_path, embedder=embedder)
     query_vector = embedder([query])[0]
 
     clauses = ["c.domain = ?", "c.embedding_model = ?"]
     parameters: list = [query_vector, domain, OLLAMA_EMBEDDING_MODEL]
+    source_date = "CAST(c.source_date AS DATE)" if domain == DOMAIN_STOCK_NOTE else "c.source_date"
     if start_date:
-        clauses.append("c.source_date >= ?")
+        clauses.append(f"{source_date} >= ?")
         parameters.append(start_date)
     if end_date:
-        clauses.append("c.source_date <= ?")
+        clauses.append(f"{source_date} <= ?")
         parameters.append(end_date)
     if section:
         clauses.append("lower(c.section_label) = lower(?)")
@@ -496,7 +565,7 @@ def search_documents(
             """,
                 parameters,
             )
-        else:
+        elif domain == DOMAIN_STOCK_ALERT:
             cursor = con.execute(
                 f"""
                 WITH scored AS (
@@ -511,6 +580,24 @@ def search_documents(
                        a.message, c.score
                 FROM scored c
                 JOIN stock_alerts a ON a.id = c.source_id
+                ORDER BY c.score DESC
+                LIMIT ?
+                """,
+                parameters,
+            )
+        else:
+            cursor = con.execute(
+                f"""
+                WITH scored AS (
+                    SELECT c.*, list_cosine_similarity(c.embedding, ?) AS score
+                    FROM semantic_chunks c
+                    WHERE {' AND '.join(clauses)}
+                )
+                SELECT c.source_id, c.source_date AS date,
+                       n.ticker, n.note, n.created_at, n.updated_at, c.score
+                FROM scored c
+                JOIN stock_notes n ON n.id = c.source_id
+                WHERE NOT n.is_deleted
                 ORDER BY c.score DESC
                 LIMIT ?
                 """,

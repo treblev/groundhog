@@ -326,6 +326,8 @@ async def _build_schema(session: ClientSession) -> str:
             note = "  -- signal_type: 'sma_cross' or 'supertrend'; timeframe: 'daily' or 'weekly'; direction: 'bullish' or 'bearish'; value: SMA gap (sma_cross) or supertrend line price (supertrend)"
         elif table == "stock_alerts":
             note = "  -- alert_type: 'golden_cross', 'death_cross', 'supertrend_daily_bullish', 'supertrend_daily_bearish', 'supertrend_weekly_bullish', 'supertrend_weekly_bearish'"
+        elif table == "stock_notes":
+            note = "  -- current user-authored ticker notes; exclude is_deleted=true rows for active-note listings"
         elif table == "workouts":
             types_result = await session.call_tool("run_sql", {"query": "SELECT DISTINCT structure_type FROM workouts WHERE structure_type IS NOT NULL"})
             types = [line.strip() for line in types_result.content[0].text.splitlines() if line.strip() and line.strip() != "structure_type"]
@@ -357,7 +359,9 @@ def _system_prompt(schema: str) -> str:
         "Use get_workout_for_date for exact dates and run_sql for counts or structured analysis. "
         "For historical weekly Supertrend alert requests by meaning or similarity, "
         "call search_documents with domain='stock_alert'. Use database tools for current stock prices, "
-        "signal state, exact alert listings, counts, and aggregates.\n"
+        "signal state, exact alert listings, counts, and aggregates. For semantic questions about "
+        "the user's own stock research notes, call search_documents with domain='stock_note'; "
+        "use ticker filtering when a ticker is named.\n"
         "NEVER call remember() unless the user explicitly says 'remember' or 'save'.\n"
         "Call recall() ONLY for questions about personal opinions, preferences, or stated beliefs.\n"
         f"\nDatabase schema:\n{schema}"

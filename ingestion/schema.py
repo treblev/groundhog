@@ -64,6 +64,28 @@ def init_db(db_path: Path | str | None = None):
     """)
 
     con.execute("""
+        CREATE TABLE IF NOT EXISTS stock_notes (
+            id VARCHAR PRIMARY KEY,
+            ticker VARCHAR NOT NULL,
+            note TEXT NOT NULL,
+            is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS stock_note_revisions (
+            note_id VARCHAR NOT NULL,
+            revision INTEGER NOT NULL,
+            note TEXT NOT NULL,
+            action VARCHAR NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (note_id, revision)
+        )
+    """)
+
+    con.execute("""
         CREATE TABLE IF NOT EXISTS reminders (
             id VARCHAR,
             title VARCHAR,

@@ -1,0 +1,14 @@
+{
+  "id": "groundhog-request-trace",
+  "name": "Groundhog request trace",
+  "description": "Writes local JSONL traces for agent runs that execute Groundhog MCP tools.",
+  "activation": { "onStartup": true, "onConfigPaths": ["plugins.entries.groundhog-request-trace"] },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "logDir": { "type": "string" },
+      "retentionDays": { "type": "integer", "minimum": 1 }
+    }
+  }
+}

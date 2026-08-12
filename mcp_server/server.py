@@ -68,15 +68,16 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="search_documents",
             description=(
-                "Search stored workout plans or historical weekly Supertrend alerts by meaning or "
+                "Search stored workout plans, historical weekly Supertrend alerts, or user-authored ticker notes by meaning or "
                 "similarity. Use domain='workout' for non-date workout lookup and domain='stock_alert' "
-                "for historical weekly flips; use structured tools for exact dates, counts, and market facts."
+                "for historical weekly flips; use domain='stock_note' for semantic note retrieval. "
+                "Use structured tools for exact dates, counts, and market facts."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Natural-language semantic search query."},
-                    "domain": {"type": "string", "enum": ["workout", "stock_alert"], "default": "workout"},
+                    "domain": {"type": "string", "enum": ["workout", "stock_alert", "stock_note"], "default": "workout"},
                     "top_k": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
                     "start_date": {"type": "string", "description": "Optional inclusive YYYY-MM-DD lower bound."},
                     "end_date": {"type": "string", "description": "Optional inclusive YYYY-MM-DD upper bound."},
