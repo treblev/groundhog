@@ -98,6 +98,7 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 - **Date from filename, not screenshot**: screenshot OCR for dates is unreliable (workouts + sleep)
 - **`ta` library for SMA, manual pandas for Supertrend**: `pandas-ta` fails on Python 3.14 (numba won't build)
 - **Weekly Supertrend**: resample daily OHLCV to weekly with `resample("W-FRI")` — do not fetch weekly bars from yfinance
+- **Weekly Supertrend only uses completed weeks**: Friday-labelled resampled bars are excluded until that Friday arrives; this prevents Monday–Thursday data from producing future-dated weekly signals or alerts.
 - **Hash-based workout IDs**: `SHA256(date|name|description[:50])[:16]` for safe re-runs
 - **Workout semantic index is derived, local, and versioned**: index one whole-plan chunk plus recognized Fitness, Performance, HYROX, Tread, Row, and Floor sections. Store source metadata, content hashes, model name, and vectors in `semantic_chunks`; refresh changed/model-mismatched chunks and delete stale chunks. `workouts` remains the source of truth.
 - **Semantic retrieval is for workout intent and weekly Supertrend alert history**: `search_documents` embeds a query locally and uses DuckDB cosine similarity. Workout search returns the best chunk per workout; stock-alert search returns qualifying weekly bullish/bearish flips and accepts ticker, direction, and date filters. Do not use it for exact-date workout retrieval, current stock facts, aggregates, OHLCV bars, or signal-state queries.
@@ -150,6 +151,10 @@ python scripts/index_semantic_documents.py
 python scripts/index_semantic_documents.py --domain all
 python scripts/index_semantic_documents.py --domain stock_alert
 python scripts/index_semantic_documents.py --dry-run
+
+# Inspect or remove accidental future-dated weekly Supertrend artifacts.
+python scripts/repair_weekly_supertrend.py --dry-run
+python scripts/repair_weekly_supertrend.py
 
 # Analytics
 python analytics/signals.py         # compute SMA + Supertrend signals
@@ -263,6 +268,7 @@ No external APIs receive personal data. No API keys needed.
 14. **Pending transactions are not imported**: a row explicitly labeled pending is skipped. Posted rows need a merchant, charge amount, and resolvable date.
 15. **Semantic chunks are not user data to edit directly**: they are rebuildable derived copies of workout text. Use `scripts/index_semantic_documents.py` to refresh them; do not treat them as the canonical workout record.
 16. **Embedding model changes trigger reindexing**: `sync_workout_embeddings()` only reuses a chunk when both its content hash and `embedding_model` match `OLLAMA_EMBEDDING_MODEL`. All compared vectors therefore come from one model/dimension.
+17. **Weekly signals must not be future-dated**: `W-FRI` labels a partial week with that Friday. Keep only labels on or before the Phoenix current date; use `scripts/repair_weekly_supertrend.py` for any premature historical rows.
 
 ---
 
@@ -300,6 +306,7 @@ In order (most recent last):
 - Added fixed merchant categorization so Circle K spending is always classified as `beer`
 - Added local workout semantic search: Ollama embeddings, idempotent DuckDB chunk index, semantic MCP tool, query filters, and LangGraph guidance requiring it for non-date workout requests
 - Added local semantic retrieval for historical weekly Supertrend alerts, derived from `stock_alerts` with ticker, direction, and date filters; prices and current signal state remain structured queries
+- Fixed partial-week weekly Supertrend handling, added repair tooling for premature future-dated alerts, and queued a Telegram completion summary after every daily stock run
 
 ---
 

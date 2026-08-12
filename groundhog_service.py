@@ -14,7 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import duckdb
 
-from agent.events import record_event
+from agent.events import event_id_for, record_event
+from agent.outbox import enqueue_event
 from agent.runs import finish_run, start_run
 from agent.summaries import generate_daily_summary, generate_weekly_review, prioritize_pending_outbox
 from analytics import alerts, signals
@@ -94,7 +95,11 @@ def inspect_schema(table: str | None = None) -> list[dict]:
 
 
 def _finish_run(
-    run_id: str, job_name: str, status: str, error_text: str | None = None
+    run_id: str,
+    job_name: str,
+    status: str,
+    error_text: str | None = None,
+    summary: dict | None = None,
 ) -> None:
     con = duckdb.connect(str(DB_PATH))
     try:
@@ -111,9 +116,24 @@ def _finish_run(
                 "job_name": job_name,
                 "status": status,
                 "error_text": error_text,
+                **({"summary": summary} if summary else {}),
             },
             dedupe_key=f"agent_run:{run_id}:{event_type}",
         )
+        if status == "failed":
+            enqueue_event(con, event_id_for(f"agent_run:{run_id}:{event_type}"))
+        elif job_name == DAILY_STOCKS_JOB and summary:
+            summary_key = f"daily_stocks_completed:{run_id}"
+            if record_event(
+                con,
+                event_type="daily_stocks_completed",
+                source="groundhog_service",
+                subject_type="agent_run",
+                subject_id=run_id,
+                payload=summary,
+                dedupe_key=summary_key,
+            ):
+                enqueue_event(con, event_id_for(summary_key))
         con.execute("COMMIT")
     except Exception:
         con.execute("ROLLBACK")
@@ -132,8 +152,15 @@ def run_daily_stocks() -> None:
         con.close()
 
     try:
+        con = duckdb.connect(str(DB_PATH), read_only=True)
+        try:
+            alert_count_before = con.execute("SELECT COUNT(*) FROM stock_alerts").fetchone()[0]
+        finally:
+            con.close()
         print("--- Fetching prices ---")
-        stocks.run()
+        stock_stats = stocks.run()
+        if not isinstance(stock_stats, dict):
+            stock_stats = {}
         print("--- Computing signals ---")
         signals.run()
         print("--- Checking alerts ---")
@@ -143,7 +170,38 @@ def run_daily_stocks() -> None:
         _finish_run(run_id, DAILY_STOCKS_JOB, "failed", error_text)
         raise
     else:
-        _finish_run(run_id, DAILY_STOCKS_JOB, "succeeded")
+        con = duckdb.connect(str(DB_PATH), read_only=True)
+        try:
+            alert_count_after = con.execute("SELECT COUNT(*) FROM stock_alerts").fetchone()[0]
+            latest_price_date = con.execute("SELECT MAX(date) FROM stock_watchlist").fetchone()[0]
+        finally:
+            con.close()
+        new_alert_count = alert_count_after - alert_count_before
+        no_data = stock_stats.get("no_data", [])
+        errors = stock_stats.get("errors", [])
+        issues = [*no_data, *(item["ticker"] for item in errors if "ticker" in item)]
+        message = (
+            f"Daily stocks completed: {new_alert_count} new alert(s); "
+            f"{stock_stats.get('rows_inserted', 0)} price row(s) inserted; "
+            f"prices through {latest_price_date}."
+        )
+        if issues:
+            message += f" Data issues: {', '.join(issues)}."
+        _finish_run(
+            run_id,
+            DAILY_STOCKS_JOB,
+            "succeeded",
+            summary={
+                "message": message,
+                "job_name": DAILY_STOCKS_JOB,
+                "status": "succeeded",
+                "new_alert_count": new_alert_count,
+                "latest_price_date": latest_price_date,
+                "rows_inserted": stock_stats.get("rows_inserted", 0),
+                "no_data": no_data,
+                "errors": errors,
+            },
+        )
 
 
 def run_weekend_crypto_prices() -> None:

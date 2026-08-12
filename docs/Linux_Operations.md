@@ -224,6 +224,10 @@ OpenClaw is the production scheduler for weekday stock jobs. The deployed job
 is `groundhog-daily-stocks`; it runs exactly at 5:00 PM in
 `America/Phoenix` on Monday through Friday, with no stagger. It invokes the
 same `groundhog_service.py run daily-stocks` command as the manual entrypoint.
+Every successful daily run queues a Telegram completion summary through the
+Groundhog outbox, including the new-alert count, latest price date, and any
+tickers that returned no data or errors. Individual stock alerts remain separate
+outbox messages.
 
 Useful checks and a manual trigger:
 
@@ -239,6 +243,23 @@ duplicate 5 PM run. Keep its service installed only as a manual fallback:
 ```bash
 systemctl --user start groundhog-stocks.service
 ```
+
+## Weekly Supertrend Repair
+
+Weekly bars are labelled with Friday by `resample("W-FRI")`; Groundhog excludes
+that labelled bar until Friday arrives. If an earlier version recorded weekly
+signals or alerts dated after the current Phoenix date, inspect and remove only
+those premature artifacts before the next completed-week run:
+
+```bash
+cd /home/openclaw/apps/groundhog
+venv/bin/python scripts/repair_weekly_supertrend.py --dry-run
+venv/bin/python scripts/repair_weekly_supertrend.py
+```
+
+The repair removes dependent stock-alert semantic chunks, events, and outbox
+rows together with invalid weekly signals and alerts. It leaves valid historical
+records unchanged.
 
 ## Optional Daemon Mode
 

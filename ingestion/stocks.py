@@ -125,13 +125,22 @@ def upsert_current_price(con: duckdb.DuckDBPyConnection, row: tuple) -> None:
     )
 
 
-def run(tickers: set[str] | None = None) -> None:
+def run(tickers: set[str] | None = None) -> dict:
     watchlist = load_watchlist()
+    stats = {
+        "watchlist_count": 0,
+        "fetched_tickers": [],
+        "skipped_current": [],
+        "no_data": [],
+        "errors": [],
+        "rows_inserted": 0,
+    }
     if tickers is not None:
         watchlist = [(ticker, period) for ticker, period in watchlist if ticker in tickers]
+    stats["watchlist_count"] = len(watchlist)
     if not watchlist:
         print("No matching watchlist tickers.")
-        return
+        return stats
 
     con = duckdb.connect(str(DB_PATH))
     try:
@@ -141,6 +150,7 @@ def run(tickers: set[str] | None = None) -> None:
                 start_date = latest_date + timedelta(days=1) if latest_date else None
                 if start_date and start_date > date.today():
                     print(f"Skipping {ticker}: already current through {latest_date}.")
+                    stats["skipped_current"].append(ticker)
                     continue
 
                 if start_date:
@@ -151,13 +161,18 @@ def run(tickers: set[str] | None = None) -> None:
                 rows = _fetch_history(ticker, period, start_date)
                 if not rows:
                     print(f"  No data returned, skipping.")
+                    stats["no_data"].append(ticker)
                     continue
                 inserted = _bulk_insert(con, rows)
                 print(f"  {len(rows)} rows fetched, {inserted} inserted.")
+                stats["fetched_tickers"].append(ticker)
+                stats["rows_inserted"] += inserted
             except Exception as e:
                 print(f"  Error: {e}")
+                stats["errors"].append({"ticker": ticker, "error": str(e)})
     finally:
         con.close()
+    return stats
 
 
 if __name__ == "__main__":

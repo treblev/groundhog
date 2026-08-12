@@ -7,6 +7,7 @@ import duckdb
 
 EVENT_TYPES = {
     "job_completed",
+    "daily_stocks_completed",
     "job_failed",
     "stock_signal_flipped",
     "stock_alert_created",

@@ -101,6 +101,39 @@ class RunTrackingTests(unittest.TestCase):
         self.assertIsNotNone(row[2])
         self.assertIsNone(row[3])
 
+    def test_daily_pipeline_queues_completion_summary(self):
+        stats = {
+            "rows_inserted": 3,
+            "no_data": ["EA"],
+            "errors": [],
+        }
+        with (
+            patch.object(groundhog_service, "DB_PATH", self.db_path),
+            patch.object(groundhog_service.stocks, "run", return_value=stats),
+            patch.object(groundhog_service.signals, "run"),
+            patch.object(groundhog_service.alerts, "run"),
+        ):
+            groundhog_service.run_daily_stocks()
+
+        con = self._connection()
+        try:
+            payload = con.execute(
+                "SELECT payload::VARCHAR FROM events WHERE event_type = 'daily_stocks_completed'"
+            ).fetchone()[0]
+            pending = con.execute(
+                """
+                SELECT o.status FROM outbox o JOIN events e ON e.id = o.event_id
+                WHERE e.event_type = 'daily_stocks_completed'
+                """
+            ).fetchone()[0]
+        finally:
+            con.close()
+
+        result = json.loads(payload)
+        self.assertEqual(pending, "pending")
+        self.assertEqual(result["new_alert_count"], 0)
+        self.assertIn("EA", result["message"])
+
     def test_weekend_crypto_job_fetches_only_bitcoin(self):
         with (
             patch.object(groundhog_service, "DB_PATH", self.db_path),
