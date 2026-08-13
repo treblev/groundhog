@@ -227,6 +227,32 @@ def init_db(db_path: Path | str | None = None):
     con.execute("ALTER TABLE outbox ADD COLUMN IF NOT EXISTS priority_reason VARCHAR")
 
     con.execute("""
+        CREATE TABLE IF NOT EXISTS media_ingestion_jobs (
+            id VARCHAR PRIMARY KEY,
+            content_hash VARCHAR NOT NULL,
+            source_channel VARCHAR NOT NULL,
+            source_message_id VARCHAR NOT NULL,
+            kind VARCHAR NOT NULL CHECK (kind IN ('activity')),
+            spool_path VARCHAR NOT NULL,
+            caption TEXT,
+            status VARCHAR NOT NULL CHECK (
+                status IN ('queued', 'processing', 'retry_wait', 'imported', 'needs_review')
+            ),
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            lease_owner VARCHAR,
+            lease_expires_at TIMESTAMP,
+            error_code VARCHAR,
+            error_text TEXT,
+            result_json JSON,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP,
+            UNIQUE (source_channel, source_message_id, content_hash, kind)
+        )
+    """)
+
+    con.execute("""
         CREATE TABLE IF NOT EXISTS derived_artifacts (
             id VARCHAR PRIMARY KEY,
             artifact_type VARCHAR NOT NULL,

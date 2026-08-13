@@ -1,0 +1,19 @@
+[Unit]
+Description=Groundhog durable media-ingestion worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/openclaw/apps/groundhog
+Environment=TZ=America/Phoenix
+Environment=GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb
+Environment=GROUNDHOG_OPENCLAW_MEDIA_STATE_PATH=/home/openclaw/data/groundhog/openclaw_activity_media_state.json
+ExecStartPre=/home/openclaw/apps/groundhog/venv/bin/python ingestion/schema.py
+ExecStart=/home/openclaw/apps/groundhog/venv/bin/python -m scripts.media_ingestion worker
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

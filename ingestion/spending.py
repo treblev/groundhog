@@ -9,9 +9,11 @@ import base64
 import hashlib
 from io import BytesIO
 import json
+import os
 import re
 import shutil
-from datetime import date, datetime, timedelta
+import time
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 import duckdb
@@ -19,6 +21,7 @@ import httpx
 from PIL import Image, ImageOps
 
 from config.settings import DB_PATH, DROP_FOLDER, OLLAMA_CHAT_URL, OLLAMA_VISION_MODEL
+from agent.request_trace import RequestTrace, record_llm_call, use_trace
 from ingestion.schema import init_db
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
@@ -73,17 +76,39 @@ def _encode_image(path: Path) -> str:
 
 
 def _query_ollama(image_path: Path) -> str:
-    response = httpx.post(
-        OLLAMA_CHAT_URL,
-        json={
-            "model": OLLAMA_VISION_MODEL,
-            "messages": [{"role": "user", "content": PROMPT, "images": [_encode_image(image_path)]}],
-            "stream": False,
-        },
-        timeout=600.0,
+    started_at = datetime.now(timezone.utc)
+    monotonic_started = time.monotonic()
+    try:
+        response = httpx.post(
+            OLLAMA_CHAT_URL,
+            json={
+                "model": OLLAMA_VISION_MODEL,
+                "messages": [{"role": "user", "content": PROMPT, "images": [_encode_image(image_path)]}],
+                "stream": False,
+            },
+            timeout=600.0,
+        )
+        response.raise_for_status()
+        content = response.json()["message"]["content"]
+    except Exception as error:
+        record_llm_call(
+            started_at=started_at,
+            monotonic_started=monotonic_started,
+            model=OLLAMA_VISION_MODEL,
+            prompt=PROMPT,
+            error=error,
+            metadata={"image_path": image_path},
+        )
+        raise
+    record_llm_call(
+        started_at=started_at,
+        monotonic_started=monotonic_started,
+        model=OLLAMA_VISION_MODEL,
+        prompt=PROMPT,
+        response=content,
+        metadata={"image_path": image_path},
     )
-    response.raise_for_status()
-    return response.json()["message"]["content"]
+    return content
 
 
 def _parse_transactions(raw: str) -> list[dict]:
@@ -325,13 +350,29 @@ def main() -> None:
     category_parser.add_argument("transaction_id")
     category_parser.add_argument("category")
     args = parser.parse_args()
-    if args.command == "import":
-        result = process_image(args.image, args.reference_date)
-        if args.media_state_path:
-            mark_media_imported(args.image, args.media_state_path)
-        print(json.dumps(result, default=str, sort_keys=True))
-    else:
-        print(json.dumps(update_category(args.transaction_id, args.category), sort_keys=True))
+    operation = "expense_import" if args.command == "import" else "expense_category"
+    metadata = (
+        {"image_path": args.image, "reference_date": args.reference_date}
+        if args.command == "import"
+        else {"transaction_id": args.transaction_id, "category": args.category}
+    )
+    trace = RequestTrace(
+        operation=operation,
+        source=os.environ.get("GROUNDHOG_REQUEST_SOURCE", "groundhog_cli"),
+    ).start(**metadata)
+    with use_trace(trace):
+        try:
+            if args.command == "import":
+                result = process_image(args.image, args.reference_date)
+                if args.media_state_path:
+                    mark_media_imported(args.image, args.media_state_path)
+            else:
+                result = update_category(args.transaction_id, args.category)
+        except Exception as error:
+            trace.end("failed", str(error))
+            raise
+        trace.end("passed", result=result)
+    print(json.dumps(result, default=str, sort_keys=True))
 
 
 if __name__ == "__main__":

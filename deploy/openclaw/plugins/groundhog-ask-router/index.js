@@ -9,7 +9,11 @@ function run(python, appDir, question) {
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(python, ["-m", "scripts.ask_groundhog", question], {
       cwd: appDir,
-      env: { ...process.env, GROUNDHOG_DB_PATH: "/home/openclaw/data/groundhog/groundhog.duckdb" },
+      env: {
+        ...process.env,
+        GROUNDHOG_DB_PATH: "/home/openclaw/data/groundhog/groundhog.duckdb",
+        GROUNDHOG_REQUEST_SOURCE: "telegram",
+      },
     });
     let stdout = "";
     let stderr = "";

@@ -2,8 +2,11 @@
 
 ## Status
 
-Proposed architecture on `codex/rebuilding`. This document is a design review;
-it does not change the deployed ingestion path.
+Implementation in progress on `codex/rebuilding`. The durable schema, spool,
+worker, operator CLI, OpenClaw ingress plugin, service definition, and their
+offline regression tests are present. The deployed ingestion path has not been
+changed; the legacy watcher remains active until isolated Linux verification
+and a controlled cutover succeed.
 
 ## Problem
 
@@ -183,6 +186,17 @@ The worker:
    timeout remains explicit and long enough for the configured model.
 5. Writes the result and terminal event in one database transaction.
 6. Recovers expired `processing` leases after a worker or host restart.
+7. Every six hours, removes spool and processed-archive image copies whose
+   matching jobs all completed successfully more than 15 days earlier.
+
+Job rows remain in DuckDB after image cleanup for audit and deduplication.
+Images for queued, processing, retrying, or reviewable jobs are never removed.
+
+The job ID is also the request-trace ID. Its trace begins when enqueue accepts
+the exact attachment, records one combined `llm_call` span for each worker
+attempt, remains open across bounded infrastructure retries, and ends with a
+`passed` or `failed` `request_end` record at the terminal job state. See
+`docs/Request_Tracing.md`.
 
 Only infrastructure failures are retried automatically:
 
@@ -205,8 +219,10 @@ and same spooled image.
   from creating duplicate jobs.
 - The content-addressed spool prevents duplicate file copies.
 - Existing activity upserts prevent duplicate canonical rows.
-- The terminal event uses `media_ingestion:<job-id>:terminal` as its dedupe key,
-  so only one final Telegram message is delivered.
+- The terminal event uses
+  `media_ingestion:<job-id>:attempt:<attempt-number>:terminal` as its dedupe key,
+  so one processing attempt cannot deliver twice. An explicit operator retry
+  can still report its later outcome after an earlier review message.
 - Re-running enqueue returns the existing job and its current status.
 
 ### Status and recovery

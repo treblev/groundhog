@@ -57,6 +57,7 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 | `langgraph_client/client.py` | Active agent. Uses LangChain's `create_agent()` with MCP tools wrapped as async Python functions. |
 | `scripts/ask_groundhog.py` | One-question CLI used by Telegram `/ask`; prints only the guarded agent answer. |
 | `deploy/openclaw/plugins/groundhog-ask-router/` | Direct OpenClaw `/ask` command that invokes `scripts.ask_groundhog` without outer-model routing. |
+| `deploy/openclaw/plugins/groundhog-request-trace/` | Local JSONL tracing for ordinary OpenClaw request, LLM-call, and tool-call spans. Direct Groundhog subprocesses use `agent/request_trace.py`. |
 | `deploy/openclaw/skills/groundhog-ask/SKILL.md` | Fallback `/ask` routing instructions when the direct plugin is unavailable. |
 | `deploy/openclaw/plugins/groundhog-spending-router/` | Direct OpenClaw command plugin for `/expense` imports and `/expense-category` corrections. |
 | `deploy/openclaw/plugins/groundhog-stock-notes-router/` | Direct OpenClaw command plugin for ticker-note add/edit/delete/list actions. |

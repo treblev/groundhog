@@ -256,6 +256,25 @@ Runtime inspection must show `status: loaded`, command `ask`, and no
 diagnostics. Ticker-specific and broader stock questions deterministically
 retrieve active user notes before the local model plans its answer.
 
+## Local Request Tracing
+
+Install the request tracer to capture ordinary OpenClaw agent turns. Direct
+Groundhog subprocesses such as `/ask`, `/expense`, stock notes, and asynchronous
+activity imports also write the same format themselves.
+
+```bash
+cd /home/openclaw/apps/groundhog
+openclaw plugins install /home/openclaw/apps/groundhog/deploy/openclaw/plugins/groundhog-request-trace
+openclaw plugins enable groundhog-request-trace
+systemctl --user restart openclaw-gateway.service
+openclaw plugins inspect groundhog-request-trace --runtime --json
+```
+
+Runtime inspection must show `status: loaded`, the LLM/tool lifecycle hooks,
+and no diagnostics. Logs are local at
+`/home/openclaw/data/groundhog/logs/request-traces/` and are retained for 15
+days. See `docs/Request_Tracing.md` for the record contract and `jq` examples.
+
 ## OpenClaw Stock Schedule
 
 OpenClaw is the production scheduler for weekday stock jobs. The deployed job
