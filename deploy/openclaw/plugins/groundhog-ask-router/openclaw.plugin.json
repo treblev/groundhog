@@ -1,0 +1,17 @@
+{
+  "id": "groundhog-ask-router",
+  "name": "Groundhog ask router",
+  "description": "Deterministically routes Telegram /ask questions to the guarded local Groundhog agent.",
+  "activation": {
+    "onStartup": true,
+    "onConfigPaths": ["plugins.entries.groundhog-ask-router"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "appDir": {"type": "string"},
+      "python": {"type": "string"}
+    }
+  }
+}

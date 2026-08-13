@@ -6,6 +6,8 @@ description: Answer a Telegram message beginning with /ask by running the guarde
 # Groundhog `/ask`
 
 For a direct Telegram text message that begins with `/ask`, use this skill.
+The registered `groundhog-ask-router` command normally handles this before model
+routing; this skill is the fallback behavior only.
 
 1. Extract everything after `/ask` as the question. If it is empty, reply: `Usage: /ask <question about your Groundhog data>`.
 2. Run the guarded Groundhog query command from the project directory. Use the exec tool's
@@ -20,6 +22,7 @@ For a direct Telegram text message that begins with `/ask`, use this skill.
    Environment: `GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb`.
 
 3. Reply with the command's standard output only. Do not answer the data question using your own model or add implementation details.
+   Do not send an intermediate acknowledgement, search memory, or call Groundhog MCP tools yourself.
 4. If the command fails, reply: `Groundhog could not answer that question right now. Please try again.` Do not expose error text, paths, commands, or configuration.
 
 Do not use this skill for image uploads; those continue through the deterministic media watcher.

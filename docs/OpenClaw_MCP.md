@@ -45,7 +45,10 @@ add `--dry-run` to validate without writing.
 
 ## Direct Command Boundary
 
-Spending screenshot ingestion and ticker-note writes do not use MCP. The registered OpenClaw
+Telegram `/ask` transport, spending screenshot ingestion, and ticker-note writes bypass
+OpenClaw model routing. The registered OpenClaw
+`groundhog-ask-router` command invokes the guarded Groundhog agent directly and returns only
+its final output. The registered OpenClaw
 commands `/expense` and `/expense-category` are provided by
 `deploy/openclaw/plugins/groundhog-spending-router` and invoke
 `ingestion.spending` directly. This deterministic route prevents the chat model

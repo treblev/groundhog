@@ -6,7 +6,7 @@
 
 **Groundhog** is a personal data pipeline and local AI agent. It ingests health, sleep, workout, spending, and stock market data into a single local DuckDB database, runs technical analysis signals, fires alerts on trading signals, and answers natural-language questions about the data via an LLM agent.
 
-**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Production on Linux tracks the `main` branch under the `openclaw` service user. Telegram activity, workout, sleep, and spending screenshots are imported deterministically; Telegram text questions use `/ask <question>` to invoke the guarded LangGraph agent. `/expense` bypasses chat-model routing and invokes Groundhog's local spending importer directly. The agent has mutable todos, a 12-tool-call limit, database-grounding retries, and an internal-details disclosure guard. Dedicated tools cover activity and sleep summaries, exact-date workout lookup, local semantic workout-plan search, data freshness, and a market summary that includes Bitcoin. OpenClaw handles chat, commands, scheduling, and delivery; Groundhog remains the local data and analytics layer.
+**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Production on Linux tracks the `main` branch under the `openclaw` service user. Telegram activity, workout, sleep, and spending screenshots are imported deterministically; Telegram text questions use the direct `/ask <question>` command to invoke the guarded LangGraph agent. `/expense` bypasses chat-model routing and invokes Groundhog's local spending importer directly. The agent has mutable todos, a 12-tool-call limit, database-grounding retries, an internal-details disclosure guard, and deterministic note prefetch when a question names a ticker with active notes. Dedicated tools cover activity and sleep summaries, exact-date workout lookup, local semantic workout-plan search, data freshness, and a market summary that includes Bitcoin. OpenClaw handles chat, commands, scheduling, and delivery; Groundhog remains the local data and analytics layer.
 
 ---
 
@@ -29,7 +29,7 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 - **Analytics**: SMA50/200 crossover, Supertrend (daily + weekly) → `stock_signals` → `stock_alerts`
 - **Agent**: MCP tool server (stdio JSON-RPC) + LangGraph client (`create_agent()`), replacing the hand-rolled loop
 - **Semantic retrieval**: `search_documents` indexes and ranks stored workout plans, weekly Supertrend alert history, and active user-authored ticker notes locally. It is required for a non-date workout lookup and semantic historical-alert or ticker-note lookup; exact-date retrieval, current market facts, and structured counts/aggregates stay on MCP data tools or `run_sql`.
-- **Direct commands**: OpenClaw's `groundhog-spending-router` handles `/expense` and `/expense-category`; `groundhog-stock-notes-router` handles ticker-note writes. Both bypass model routing and call local code directly.
+- **Direct commands**: OpenClaw's `groundhog-ask-router` handles `/ask`; `groundhog-spending-router` handles `/expense` and `/expense-category`; `groundhog-stock-notes-router` handles ticker-note writes. All bypass outer-model routing and call local code directly.
 - **Scheduling**: OpenClaw cron under `openclaw` (daily stocks: 5 PM America/Phoenix, weekdays)
 - **AI**: Ollama local only. `qwen3.6:latest` for SQL/text, `qwen3-vl:latest` for vision, `qwen3-embedding:0.6b` for memory and semantic-search embeddings. No external API calls with personal data.
 
@@ -56,7 +56,8 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 | `mcp_client/client.py` | Old hand-rolled agent loop. Replaced. Keep for reference. |
 | `langgraph_client/client.py` | Active agent. Uses LangChain's `create_agent()` with MCP tools wrapped as async Python functions. |
 | `scripts/ask_groundhog.py` | One-question CLI used by Telegram `/ask`; prints only the guarded agent answer. |
-| `deploy/openclaw/skills/groundhog-ask/SKILL.md` | OpenClaw skill that routes Telegram `/ask` messages to `scripts.ask_groundhog`. |
+| `deploy/openclaw/plugins/groundhog-ask-router/` | Direct OpenClaw `/ask` command that invokes `scripts.ask_groundhog` without outer-model routing. |
+| `deploy/openclaw/skills/groundhog-ask/SKILL.md` | Fallback `/ask` routing instructions when the direct plugin is unavailable. |
 | `deploy/openclaw/plugins/groundhog-spending-router/` | Direct OpenClaw command plugin for `/expense` imports and `/expense-category` corrections. |
 | `deploy/openclaw/plugins/groundhog-stock-notes-router/` | Direct OpenClaw command plugin for ticker-note add/edit/delete/list actions. |
 | `groundhog_service.py` | Service CLI: `run daily-stocks` and `status` |
@@ -305,7 +306,7 @@ In order (most recent last):
 - Fixed broken tool wrappers in `langgraph_client`
 - Added Groundhog service run tracking, events, outbox rows, service-state MCP tools, local summary artifacts, and optional daemon mode
 - Added deterministic Telegram sleep uploads, pool-swim metrics, and Telegram import confirmations
-- Added guarded Telegram `/ask` queries through LangGraph and OpenClaw's `groundhog-ask` skill
+- Added guarded Telegram `/ask` queries through LangGraph and a deterministic OpenClaw command plugin
 - Added tool-call limits, grounding retries, and internal-details response protection
 - Added dedicated activity summary, sleep summary, workout lookup, data freshness, and Bitcoin-inclusive market-summary tools
 - Promoted the tested `long-running-agent` history into `main`; Linux production now tracks `main`

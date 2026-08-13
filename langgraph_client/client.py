@@ -34,6 +34,11 @@ _DUCKDB_DIALECT = """\
 -- Subqueries: no LIMIT inside subqueries — use a CTE instead
 """
 
+_STOCK_QUESTION_RE = re.compile(
+    r"\b(?:stock|stocks|share|shares|ticker|tickers|portfolio|position|positions)\b",
+    re.IGNORECASE,
+)
+
 
 class DatabaseGroundingMiddleware(AgentMiddleware):
     """Verify factual answers against this run's tool output and repair once."""
@@ -45,18 +50,21 @@ class DatabaseGroundingMiddleware(AgentMiddleware):
 
     _CORRECTION_MARKER = "[Grounding verifier correction]"
 
-    def __init__(self, verifier_model=None):
+    def __init__(self, verifier_model=None, prefetched_evidence: str = ""):
         super().__init__()
+        self.prefetched_evidence = prefetched_evidence.strip()
         self.verifier_model = verifier_model or ChatOllama(
             model=OLLAMA_SQL_MODEL,
             base_url=OLLAMA_BASE_URL,
             temperature=0,
         )
 
-    @staticmethod
-    def _tool_evidence(messages) -> str:
-        return "\n\n".join(
+    def _tool_evidence(self, messages) -> str:
+        tool_evidence = "\n\n".join(
             str(message.content) for message in messages if isinstance(message, ToolMessage)
+        )
+        return "\n\n".join(
+            item for item in (self.prefetched_evidence, tool_evidence) if item
         )
 
     @classmethod
@@ -204,14 +212,14 @@ class InternalDetailsMiddleware(AgentMiddleware):
         return Command(goto="model", update={"messages": [correction]})
 
 
-def _make_middleware() -> list[AgentMiddleware]:
+def _make_middleware(prefetched_evidence: str = "") -> list[AgentMiddleware]:
     """Return the local-only safety and planning middleware for the agent."""
     return [
         ToolRetryMiddleware(max_retries=2, initial_delay=0, jitter=False),
         ToolCallLimitMiddleware(run_limit=12, exit_behavior="continue"),
         TodoListMiddleware(),
         InternalDetailsMiddleware(),
-        DatabaseGroundingMiddleware(),
+        DatabaseGroundingMiddleware(prefetched_evidence=prefetched_evidence),
     ]
 
 
@@ -257,7 +265,7 @@ def _make_tools(session: ClientSession) -> list:
         ticker: str | None = None,
         direction: str | None = None,
     ) -> str:
-        """Search workout plans or historical weekly Supertrend alerts by meaning or similarity."""
+        """Search workout plans, weekly Supertrend alerts, or any user-authored stock notes."""
         arguments = {
             key: value
             for key, value in {
@@ -339,7 +347,13 @@ async def _build_schema(session: ClientSession) -> str:
     return _DUCKDB_DIALECT + "\n".join(schema_parts)
 
 
-def _system_prompt(schema: str) -> str:
+def _system_prompt(schema: str, stock_note_context: str = "") -> str:
+    note_context = (
+        "\nUser-authored stock notes retrieved for this question:\n"
+        f"{stock_note_context}\n"
+        if stock_note_context
+        else ""
+    )
     return (
         "You are a personal data assistant with access to tools that query a local database.\n"
         "Use tools to answer factual questions about the user's personal data. Do not guess — "
@@ -359,13 +373,68 @@ def _system_prompt(schema: str) -> str:
         "Use get_workout_for_date for exact dates and run_sql for counts or structured analysis. "
         "For historical weekly Supertrend alert requests by meaning or similarity, "
         "call search_documents with domain='stock_alert'. Use database tools for current stock prices, "
-        "signal state, exact alert listings, counts, and aggregates. For semantic questions about "
-        "the user's own stock research notes, call search_documents with domain='stock_note'; "
-        "use ticker filtering when a ticker is named.\n"
+        "signal state, exact alert listings, counts, and aggregates. Stock notes are arbitrary "
+        "user-authored context and may contain any subject. Never classify them by content. "
+        "When stock-note evidence is supplied below, consider it before answering and never claim "
+        "there is no record without accounting for that evidence.\n"
         "NEVER call remember() unless the user explicitly says 'remember' or 'save'.\n"
         "Call recall() ONLY for questions about personal opinions, preferences, or stated beliefs.\n"
+        f"{note_context}"
         f"\nDatabase schema:\n{schema}"
     )
+
+
+def _named_note_tickers(question: str, tickers: list[str]) -> list[str]:
+    """Return active note tickers explicitly present in a question."""
+    return [
+        ticker
+        for ticker in tickers
+        if re.search(
+            rf"(?<![A-Z0-9.\-]){re.escape(ticker)}(?![A-Z0-9.\-])",
+            question,
+            re.IGNORECASE,
+        )
+    ]
+
+
+def _table_values(text: str, header: str) -> list[str]:
+    """Parse one-column run_sql output while ignoring its header."""
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and line.strip().lower() != header.lower()
+    ]
+
+
+async def _prefetch_stock_notes(session: ClientSession, question: str) -> str:
+    """Retrieve arbitrary user notes for ticker-specific or broader stock questions."""
+    result = await session.call_tool(
+        "run_sql",
+        {"query": "SELECT DISTINCT ticker FROM stock_notes WHERE NOT is_deleted ORDER BY ticker"},
+    )
+    ticker_text = result.content[0].text if result.content else ""
+    tickers = _table_values(ticker_text, "ticker")
+    named_tickers = _named_note_tickers(question, tickers)
+    if not named_tickers and not _STOCK_QUESTION_RE.search(question):
+        return ""
+
+    evidence: list[str] = []
+    searches = named_tickers or [None]
+    for ticker in searches:
+        arguments = {
+            "query": question,
+            "domain": "stock_note",
+            "top_k": 10,
+        }
+        if ticker:
+            arguments["ticker"] = ticker
+        result = await session.call_tool(
+            "search_documents",
+            arguments,
+        )
+        text = result.content[0].text if result.content else "[]"
+        evidence.append(f"{ticker or 'all active stock notes'}: {text}")
+    return "\n".join(evidence)
 
 
 async def ask_question(question: str) -> str:
@@ -385,6 +454,7 @@ async def ask_question(question: str) -> str:
             await session.initialize()
 
             schema = await _build_schema(session)
+            stock_note_context = await _prefetch_stock_notes(session, question)
             tools = _make_tools(session)
 
             agent = create_agent(
@@ -394,8 +464,8 @@ async def ask_question(question: str) -> str:
                     temperature=0,
                 ),
                 tools=tools,
-                middleware=_make_middleware(),
-                system_prompt=_system_prompt(schema),
+                middleware=_make_middleware(prefetched_evidence=stock_note_context),
+                system_prompt=_system_prompt(schema, stock_note_context),
             )
 
             result = await agent.ainvoke({"messages": [{"role": "user", "content": question}]})

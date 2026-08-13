@@ -238,6 +238,24 @@ Runtime inspection must show `status: loaded`, commands `stocks-add-notes`,
 `stocks-edit-notes`, `stocks-delete-notes`, and `stocks-notes`, and no
 diagnostics. See `docs/Stock_Semantic_Notes.md` for commands and retrieval.
 
+## Groundhog Ask Router
+
+The `groundhog-ask-router` plugin owns Telegram `/ask` directly. It invokes the
+guarded local agent without letting OpenClaw's outer chat model answer, emit an
+intermediate response, or independently choose tools.
+
+```bash
+cd /home/openclaw/apps/groundhog
+openclaw plugins install /home/openclaw/apps/groundhog/deploy/openclaw/plugins/groundhog-ask-router
+openclaw plugins enable groundhog-ask-router
+systemctl --user restart openclaw-gateway.service
+openclaw plugins inspect groundhog-ask-router --runtime --json
+```
+
+Runtime inspection must show `status: loaded`, command `ask`, and no
+diagnostics. Ticker-specific and broader stock questions deterministically
+retrieve active user notes before the local model plans its answer.
+
 ## OpenClaw Stock Schedule
 
 OpenClaw is the production scheduler for weekday stock jobs. The deployed job
