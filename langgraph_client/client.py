@@ -437,6 +437,37 @@ async def _prefetch_stock_notes(session: ClientSession, question: str) -> str:
     return "\n".join(evidence)
 
 
+def _note_evidence_fallback(stock_note_context: str) -> str:
+    """Return a grounded user-facing answer when the agent emits no final text."""
+    notes: list[tuple[str, str]] = []
+    for line in stock_note_context.splitlines():
+        label, separator, raw_results = line.partition(": ")
+        if not separator:
+            continue
+        try:
+            results = json.loads(raw_results)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(results, list):
+            continue
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            note = str(result.get("note") or "").strip()
+            ticker = str(result.get("ticker") or label).strip().upper()
+            if note:
+                notes.append((ticker, note))
+
+    if not notes:
+        return ""
+    if len(notes) == 1:
+        ticker, note = notes[0]
+        return f"Your {ticker} note says: {note}"
+    return "Your stock notes say:\n" + "\n".join(
+        f"- {ticker}: {note}" for ticker, note in notes
+    )
+
+
 async def ask_question(question: str) -> str:
     """Answer one user question through the guarded local Groundhog agent."""
     question = question.strip()
@@ -469,7 +500,13 @@ async def ask_question(question: str) -> str:
             )
 
             result = await agent.ainvoke({"messages": [{"role": "user", "content": question}]})
-            return str(result["messages"][-1].content)
+            answer = str(result["messages"][-1].content).strip()
+            if answer:
+                return answer
+            fallback = _note_evidence_fallback(stock_note_context)
+            if fallback:
+                return fallback
+            raise RuntimeError("Groundhog agent returned an empty answer")
 
 
 async def run():

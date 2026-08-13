@@ -14,6 +14,7 @@ from langgraph_client.client import (
     InternalDetailsMiddleware,
     _make_middleware,
     _named_note_tickers,
+    _note_evidence_fallback,
     _prefetch_stock_notes,
     _system_prompt,
 )
@@ -78,6 +79,16 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Never classify them by content", prompt)
         self.assertIn("bought 4 shares", prompt)
+
+    def test_empty_agent_answer_can_fall_back_to_grounded_note_evidence(self):
+        answer = _note_evidence_fallback(
+            'BKNG: [{"ticker":"BKNG","note":"bought 4 shares in Roth IRA for $214"}]'
+        )
+
+        self.assertEqual(
+            answer,
+            "Your BKNG note says: bought 4 shares in Roth IRA for $214",
+        )
 
     def test_middleware_includes_retry_and_mutable_todos(self):
         middleware = _make_middleware()
