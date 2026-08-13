@@ -256,7 +256,7 @@ def _make_tools(session: ClientSession) -> list:
 
     async def search_documents(
         query: str,
-        domain: str = "workout",
+        domain: str | None = None,
         top_k: int = 5,
         start_date: str | None = None,
         end_date: str | None = None,
@@ -266,11 +266,12 @@ def _make_tools(session: ClientSession) -> list:
         direction: str | None = None,
     ) -> str:
         """Search workout plans, weekly Supertrend alerts, or any user-authored stock notes."""
+        resolved_domain = _resolve_search_domain(domain, ticker)
         arguments = {
             key: value
             for key, value in {
                 "query": query,
-                "domain": domain,
+                "domain": resolved_domain,
                 "top_k": top_k,
                 "start_date": start_date,
                 "end_date": end_date,
@@ -312,6 +313,13 @@ def _make_tools(session: ClientSession) -> list:
     return [run_sql, get_latest_price, get_recent_activities, get_activity_summary, get_sleep_summary,
             get_workout_for_date, search_documents, get_data_freshness, get_market_summary,
             get_health_summary, remember, recall]
+
+
+def _resolve_search_domain(domain: str | None, ticker: str | None) -> str:
+    """Infer stock-note search when a ticker is supplied without an explicit domain."""
+    if domain:
+        return domain
+    return "stock_note" if ticker else "workout"
 
 
 async def _build_schema(session: ClientSession) -> str:
@@ -437,37 +445,6 @@ async def _prefetch_stock_notes(session: ClientSession, question: str) -> str:
     return "\n".join(evidence)
 
 
-def _note_evidence_fallback(stock_note_context: str) -> str:
-    """Return a grounded user-facing answer when the agent emits no final text."""
-    notes: list[tuple[str, str]] = []
-    for line in stock_note_context.splitlines():
-        label, separator, raw_results = line.partition(": ")
-        if not separator:
-            continue
-        try:
-            results = json.loads(raw_results)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(results, list):
-            continue
-        for result in results:
-            if not isinstance(result, dict):
-                continue
-            note = str(result.get("note") or "").strip()
-            ticker = str(result.get("ticker") or label).strip().upper()
-            if note:
-                notes.append((ticker, note))
-
-    if not notes:
-        return ""
-    if len(notes) == 1:
-        ticker, note = notes[0]
-        return f"Your {ticker} note says: {note}"
-    return "Your stock notes say:\n" + "\n".join(
-        f"- {ticker}: {note}" for ticker, note in notes
-    )
-
-
 async def ask_question(question: str) -> str:
     """Answer one user question through the guarded local Groundhog agent."""
     question = question.strip()
@@ -503,9 +480,6 @@ async def ask_question(question: str) -> str:
             answer = str(result["messages"][-1].content).strip()
             if answer:
                 return answer
-            fallback = _note_evidence_fallback(stock_note_context)
-            if fallback:
-                return fallback
             raise RuntimeError("Groundhog agent returned an empty answer")
 
 
