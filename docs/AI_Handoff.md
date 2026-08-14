@@ -6,7 +6,7 @@
 
 **Groundhog** is a personal data pipeline and local AI agent. It ingests health, sleep, workout, spending, and stock market data into a single local DuckDB database, runs technical analysis signals, fires alerts on trading signals, and answers natural-language questions about the data via an LLM agent.
 
-**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Production on Linux tracks the `main` branch under the `openclaw` service user. Telegram activity, workout, sleep, and spending screenshots are imported deterministically; Telegram text questions use the direct `/ask <question>` command to invoke the guarded LangGraph agent. `/expense` bypasses chat-model routing and invokes Groundhog's local spending importer directly. The agent has mutable todos, a 12-tool-call limit, database-grounding retries, an internal-details disclosure guard, and deterministic note prefetch when a question names a ticker with active notes. Dedicated tools cover activity and sleep summaries, exact-date workout lookup, local semantic workout-plan search, data freshness, and a market summary that includes Bitcoin. OpenClaw handles chat, commands, scheduling, and delivery; Groundhog remains the local data and analytics layer.
+**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Production on Linux tracks the `main` branch under the `openclaw` service user. Telegram activity, workout, sleep, and spending screenshots are imported deterministically; Telegram text questions use the direct `/ask <question>` command to invoke the guarded LangGraph agent. `/expense` bypasses chat-model routing, durably queues the exact image, acknowledges immediately, and lets the media worker run the local spending importer. The agent has mutable todos, a 12-tool-call limit, database-grounding retries, an internal-details disclosure guard, and deterministic note prefetch when a question names a ticker with active notes. Dedicated tools cover activity and sleep summaries, exact-date workout lookup, local semantic workout-plan search, data freshness, and a market summary that includes Bitcoin. OpenClaw handles chat, commands, scheduling, and delivery; Groundhog remains the local data and analytics layer.
 
 ---
 
@@ -108,7 +108,7 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 - **Workout semantic index is derived, local, and versioned**: index one whole-plan chunk plus recognized Fitness, Performance, HYROX, Tread, Row, and Floor sections. Store source metadata, content hashes, model name, and vectors in `semantic_chunks`; refresh changed/model-mismatched chunks and delete stale chunks. `workouts` remains the source of truth.
 - **Semantic retrieval is for workout intent, weekly Supertrend alert history, and ticker-note research context**: `search_documents` embeds a query locally and uses DuckDB cosine similarity. Workout search returns the best chunk per workout; stock-alert search returns qualifying weekly bullish/bearish flips; stock-note search returns active user-authored notes. Ticker filters are supported for both stock domains. Do not use it for exact-date workout retrieval, current stock facts, aggregates, OHLCV bars, or signal-state queries.
 - **Telegram screenshots are deterministic**: do not rely on the OpenClaw chat model to interpret an image. `groundhog-openclaw-media.timer` scans `/home/openclaw/media/inbound` once per minute and calls the local `qwen3-vl:latest` importer.
-- **Spending uses a registered command, not model routing**: `/expense` is owned by the OpenClaw spending plugin and directly invokes `python -m ingestion.spending`. This prevents generic chat responses and repeated tool-selection attempts.
+- **Spending uses a registered command and durable queue, not model routing**: `/expense` is owned by the OpenClaw spending plugin, which queues `kind=expense`; the media worker invokes the spending importer. This prevents generic chat responses, repeated tool-selection attempts, and a slow vision call blocking the Gateway command.
 - **Ticker notes use registered commands, not model routing**: `/stocks-add-notes`, `/stocks-edit-notes`, and `/stocks-delete-notes` invoke the canonical local note CLI. Each write updates an append-only revision record and refreshes only derived local semantic chunks.
 - **Spending dates come from the transaction row**: explicit bank dates are parsed directly; relative Wallet labels are resolved against the Phoenix-local upload date.
 - **Spending imports are idempotent**: an identical image hash is skipped, and the same merchant/amount within a three-day window is treated as a duplicate across screenshots.
@@ -292,7 +292,7 @@ In order (most recent last):
 - Implemented `analytics/alerts.py` with optional platform notification backends and dedup
 - Added Linux systemd user timer templates for `openclaw`
 - Verified the Linux timer path completes successfully through `groundhog-stocks.service`
-- Configured OpenClaw Telegram delivery and scheduled `groundhog-outbox-telegram` to deliver Groundhog outbox rows every 15 minutes
+- Configured OpenClaw Telegram delivery and scheduled `groundhog-outbox-telegram` to deliver Groundhog outbox rows every 30 seconds
 - Expanded watchlist from 6 to 105 tickers (Nasdaq-100 via `scripts/update_watchlist.py`)
 - Fixed DuckDB rowcount -1 bug
 - Fixed NaN handling for ADI/LIN
@@ -311,7 +311,7 @@ In order (most recent last):
 - Added tool-call limits, grounding retries, and internal-details response protection
 - Added dedicated activity summary, sleep summary, workout lookup, data freshness, and Bitcoin-inclusive market-summary tools
 - Promoted the tested `long-running-agent` history into `main`; Linux production now tracks `main`
-- Added deterministic `/expense` and `/expense-category` commands through the OpenClaw spending plugin
+- Added deterministic `/expense` and `/expense-category` commands through the OpenClaw spending plugin; `/expense` uses the durable asynchronous media queue while category corrections remain synchronous
 - Added Wallet and bank transaction-list vision ingestion, the `spending` table, pending-row filtering, date parsing, image and cross-screenshot deduplication, and source-image archiving
 - Added fixed merchant categorization so Circle K spending is always classified as `beer`
 - Added local workout semantic search: Ollama embeddings, idempotent DuckDB chunk index, semantic MCP tool, query filters, and LangGraph guidance requiring it for non-date workout requests

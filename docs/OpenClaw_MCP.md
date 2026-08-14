@@ -50,7 +50,8 @@ OpenClaw model routing. The registered OpenClaw
 `groundhog-ask-router` command invokes the guarded Groundhog agent directly and returns only
 its final output. The registered OpenClaw
 commands `/expense` and `/expense-category` are provided by
-`deploy/openclaw/plugins/groundhog-spending-router` and invoke
+`deploy/openclaw/plugins/groundhog-spending-router`. `/expense` durably queues
+the exact attachment for the media worker, while `/expense-category` invokes
 `ingestion.spending` directly. This deterministic route prevents the chat model
 from treating an expense upload as a general image question or repeatedly
 deciding whether to call a tool. Do not add an overlapping spending-write MCP

@@ -84,7 +84,7 @@ No linter configured.
 | SMA | `ta` library | Same reason — pandas-ta broken |
 | Weekly signals | Resample daily OHLCV with `resample("W-FRI")` | Don't fetch weekly bars from yfinance |
 | Workout/sleep dates | From filename | Screenshot OCR is unreliable for dates |
-| Spending intake | Direct OpenClaw `/expense` command | Bypasses model routing and deterministically invokes Groundhog ingestion |
+| Spending intake | Queued OpenClaw `/expense` command | Bypasses model routing, durably queues the exact image, and processes it asynchronously |
 | Spending dates | Visible transaction label + Phoenix upload date | Wallet uses relative labels; bank screenshots may contain calendar dates |
 | Spending deduplication | Same merchant and amount within three days | Covers posting-date shifts between Wallet and bank views |
 | Watchlist default period | `"2y"` | SMA200 needs 200+ rows; `"1d"` was not enough |
@@ -126,7 +126,7 @@ No linter configured.
 - **Alerts**: `SELECT * FROM stock_alerts ORDER BY notified_at DESC LIMIT 10;`
 - **Schema changes**: re-run `ingestion/schema.py` — must be idempotent (no errors on second run)
 - **Agent**: ask "what is the latest closing price for AAPL?" — should return a number without errors
-- **Spending**: run `python -m unittest tests.test_spending_ingestion`; verify `/expense` imports posted rows and `/expense-category` updates one short transaction ID
+- **Spending**: run `python -m unittest tests.test_spending_ingestion tests.test_media_ingestion`; verify `/expense` immediately returns a job ID, later imports posted rows, and `/expense-category` updates one short transaction ID
 - **Anything touching Supertrend**: spot-check AAPL or MSFT direction against TradingView Supertrend (period=10, multiplier=3)
 
 ## Issue Tracking

@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ingestion import schema
 from ingestion import health
+from ingestion import spending
 from agent import request_trace
 from scripts import media_ingestion
 
@@ -78,6 +80,63 @@ class MediaIngestionTests(unittest.TestCase):
         finally:
             con.close()
         self.assertEqual(table_count, 1)
+
+    def test_schema_migration_preserves_activity_jobs_and_allows_expenses(self):
+        legacy_path = self.root / "legacy.duckdb"
+        con = duckdb.connect(str(legacy_path))
+        try:
+            con.execute("""
+                CREATE TABLE media_ingestion_jobs (
+                    id VARCHAR PRIMARY KEY,
+                    content_hash VARCHAR NOT NULL,
+                    source_channel VARCHAR NOT NULL,
+                    source_message_id VARCHAR NOT NULL,
+                    kind VARCHAR NOT NULL CHECK (kind IN ('activity')),
+                    spool_path VARCHAR NOT NULL,
+                    caption TEXT,
+                    status VARCHAR NOT NULL CHECK (
+                        status IN ('queued', 'processing', 'retry_wait', 'imported', 'needs_review')
+                    ),
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    lease_owner VARCHAR,
+                    lease_expires_at TIMESTAMP,
+                    error_code VARCHAR,
+                    error_text TEXT,
+                    result_json JSON,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    UNIQUE (source_channel, source_message_id, content_hash, kind)
+                )
+            """)
+            con.execute("""
+                INSERT INTO media_ingestion_jobs (
+                    id, content_hash, source_channel, source_message_id,
+                    kind, spool_path, caption, status
+                ) VALUES ('legacy-job', 'hash', 'telegram', 'message',
+                          'activity', '/spool/activity.jpg', NULL, 'queued')
+            """)
+        finally:
+            con.close()
+
+        schema.init_db(legacy_path)
+        schema.init_db(legacy_path)
+        con = duckdb.connect(str(legacy_path))
+        try:
+            self.assertEqual(
+                con.execute("SELECT id, kind, status FROM media_ingestion_jobs").fetchall(),
+                [("legacy-job", "activity", "queued")],
+            )
+            con.execute("""
+                INSERT INTO media_ingestion_jobs (
+                    id, content_hash, source_channel, source_message_id,
+                    kind, spool_path, caption, status
+                ) VALUES ('expense-job', 'expense-hash', 'telegram', 'expense-message',
+                          'expense', '/spool/expense.jpg', '/expense', 'queued')
+            """)
+        finally:
+            con.close()
 
     def test_enqueue_copies_exact_image_and_duplicate_returns_same_job(self):
         image = self._image(content=b"original attachment")
@@ -183,6 +242,128 @@ class MediaIngestionTests(unittest.TestCase):
             con.close()
         self.assertEqual(str(activity[0]), "2026-08-12")
         self.assertEqual(activity[1:], ("running", 2.5, 1500))
+        self.assertEqual(outbox_count, 1)
+
+    def test_expense_job_dispatches_spending_import_and_formats_outbox_result(self):
+        image = self._image("wallet.jpg", b"wallet screenshot")
+        job = media_ingestion.enqueue_media(
+            "expense",
+            image,
+            "/expense",
+            "telegram",
+            "expense-message-1",
+            self.db_path,
+            self.spool_dir,
+        )
+        spending_result = {
+            "transactions": [{
+                "id": "abc123def4567890",
+                "merchant": "Cafe",
+                "amount": "4.46",
+                "category": "dining",
+            }],
+            "skipped_pending": 0,
+            "skipped_duplicates": 0,
+            "skipped_invalid": 0,
+        }
+
+        with patch.object(
+            media_ingestion.spending,
+            "process_image",
+            return_value=spending_result,
+        ) as process_expense:
+            outcome = media_ingestion.process_one_job(
+                self.db_path,
+                "test-worker",
+                heartbeat_interval=1,
+            )
+
+        self.assertEqual(outcome, {"id": job["id"], "status": "imported", "records": 1})
+        call = process_expense.call_args
+        self.assertEqual(call.args[0], Path(job["spool_path"]))
+        self.assertEqual(call.kwargs["db_path"], self.db_path)
+        self.assertEqual(call.kwargs["processed_dir"], self.spool_dir)
+        con = duckdb.connect(str(self.db_path), read_only=True)
+        try:
+            kind, result_json = con.execute(
+                "SELECT kind, result_json::VARCHAR FROM media_ingestion_jobs WHERE id = ?",
+                [job["id"]],
+            ).fetchone()
+            payload = json.loads(con.execute("SELECT payload::VARCHAR FROM events").fetchone()[0])
+        finally:
+            con.close()
+        self.assertEqual(kind, "expense")
+        self.assertEqual(json.loads(result_json), spending_result)
+        self.assertIn("Imported 1 spending transaction — $4.46", payload["message"])
+        self.assertIn("abc123de — Cafe: $4.46 (dining)", payload["message"])
+
+    def test_unrecognized_expense_result_goes_to_review(self):
+        job = media_ingestion.enqueue_media(
+            "expense",
+            self._image("wallet.jpg", b"not a transaction list"),
+            "/expense",
+            "telegram",
+            "expense-message-2",
+            self.db_path,
+            self.spool_dir,
+        )
+        empty_result = {
+            "transactions": [],
+            "skipped_pending": 0,
+            "skipped_duplicates": 0,
+            "skipped_invalid": 0,
+        }
+
+        outcome = media_ingestion.process_one_job(
+            self.db_path,
+            "test-worker",
+            lambda *_: empty_result,
+        )
+
+        self.assertEqual(outcome["status"], "needs_review")
+        con = duckdb.connect(str(self.db_path), read_only=True)
+        try:
+            payload = json.loads(con.execute("SELECT payload::VARCHAR FROM events").fetchone()[0])
+        finally:
+            con.close()
+        self.assertIn(f"Expense job {job['short_id']} could not be imported", payload["message"])
+
+    def test_offline_expense_queue_inserts_spending_and_emits_outbox(self):
+        job = media_ingestion.enqueue_media(
+            "expense",
+            self._image("wallet.jpg", b"wallet screenshot"),
+            "/expense",
+            "telegram",
+            "expense-message-3",
+            self.db_path,
+            self.spool_dir,
+        )
+        response = json.dumps([{
+            "merchant": "Cafe",
+            "amount": 4.46,
+            "visible_date_label": "Today",
+            "payment_method": "Apple Pay",
+            "category": "dining",
+            "status": "posted",
+        }])
+
+        with patch.object(spending, "_query_ollama", return_value=response):
+            outcome = media_ingestion.process_one_job(
+                self.db_path,
+                "test-worker",
+                heartbeat_interval=1,
+            )
+
+        self.assertEqual(outcome, {"id": job["id"], "status": "imported", "records": 1})
+        con = duckdb.connect(str(self.db_path), read_only=True)
+        try:
+            transaction = con.execute(
+                "SELECT merchant, amount, payment_method, category FROM spending"
+            ).fetchone()
+            outbox_count = con.execute("SELECT COUNT(*) FROM outbox").fetchone()[0]
+        finally:
+            con.close()
+        self.assertEqual(transaction, ("Cafe", Decimal("4.46"), "Apple Pay", "dining"))
         self.assertEqual(outbox_count, 1)
 
     def test_parse_failure_goes_directly_to_review_and_records_factual_event(self):

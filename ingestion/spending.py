@@ -230,9 +230,14 @@ def _transaction_id(image_hash: str, source_row: int) -> str:
     return hashlib.sha256(f"{image_hash}:{source_row}".encode()).hexdigest()[:16]
 
 
-def _archive_image(image_path: Path, image_hash: str) -> Path:
-    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-    destination = PROCESSED_DIR / f"{image_hash}{image_path.suffix.lower()}"
+def _archive_image(
+    image_path: Path,
+    image_hash: str,
+    processed_dir: Path | None = None,
+) -> Path:
+    processed_dir = processed_dir or PROCESSED_DIR
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    destination = processed_dir / f"{image_hash}{image_path.suffix.lower()}"
     if not destination.exists():
         shutil.copy2(image_path, destination)
     return destination
@@ -272,15 +277,21 @@ def _is_duplicate(con, transaction: dict) -> bool:
     return any(_same_merchant(transaction["merchant"], row[0]) for row in candidates)
 
 
-def process_image(image_path: Path, reference_date: date | None = None) -> dict:
+def process_image(
+    image_path: Path,
+    reference_date: date | None = None,
+    db_path: Path | None = None,
+    processed_dir: Path | None = None,
+) -> dict:
     if image_path.suffix.lower() not in IMAGE_EXTS:
         raise ValueError(f"Unsupported image type: {image_path.suffix or '(none)'}")
     if not image_path.is_file():
         raise FileNotFoundError(image_path)
+    db_path = db_path or DB_PATH
     image_hash = _image_hash(image_path)
     reference_date = reference_date or date.today()
-    init_db(DB_PATH)
-    con = duckdb.connect(str(DB_PATH))
+    init_db(db_path)
+    con = duckdb.connect(str(db_path))
     try:
         existing = con.execute("SELECT COUNT(*) FROM spending WHERE source_image_hash = ?", [image_hash]).fetchone()[0]
     finally:
@@ -291,7 +302,7 @@ def process_image(image_path: Path, reference_date: date | None = None) -> dict:
         return result
 
     result = _normalize(_parse_transactions(_query_ollama(image_path)), reference_date)
-    con = duckdb.connect(str(DB_PATH))
+    con = duckdb.connect(str(db_path))
     try:
         inserted = []
         for source_row, transaction in enumerate(result["transactions"]):
@@ -317,7 +328,7 @@ def process_image(image_path: Path, reference_date: date | None = None) -> dict:
         result["transactions"] = inserted
     finally:
         con.close()
-    _archive_image(image_path, image_hash)
+    _archive_image(image_path, image_hash, processed_dir)
     return result
 
 

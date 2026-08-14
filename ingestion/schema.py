@@ -232,7 +232,7 @@ def init_db(db_path: Path | str | None = None):
             content_hash VARCHAR NOT NULL,
             source_channel VARCHAR NOT NULL,
             source_message_id VARCHAR NOT NULL,
-            kind VARCHAR NOT NULL CHECK (kind IN ('activity')),
+            kind VARCHAR NOT NULL CHECK (kind IN ('activity', 'expense')),
             spool_path VARCHAR NOT NULL,
             caption TEXT,
             status VARCHAR NOT NULL CHECK (
@@ -251,6 +251,56 @@ def init_db(db_path: Path | str | None = None):
             UNIQUE (source_channel, source_message_id, content_hash, kind)
         )
     """)
+
+    media_kind_checks = con.execute(
+        """
+        SELECT constraint_text
+        FROM duckdb_constraints()
+        WHERE table_name = 'media_ingestion_jobs' AND constraint_type = 'CHECK'
+          AND constraint_text LIKE '%kind%'
+        """
+    ).fetchall()
+    if media_kind_checks and not any("'expense'" in row[0] for row in media_kind_checks):
+        # DuckDB cannot alter or drop a CHECK constraint. Rebuild the table in
+        # one transaction so deployed activity jobs are preserved atomically.
+        con.execute("BEGIN TRANSACTION")
+        try:
+            con.execute("DROP TABLE IF EXISTS media_ingestion_jobs_kind_migration")
+            con.execute("""
+                CREATE TABLE media_ingestion_jobs_kind_migration (
+                    id VARCHAR PRIMARY KEY,
+                    content_hash VARCHAR NOT NULL,
+                    source_channel VARCHAR NOT NULL,
+                    source_message_id VARCHAR NOT NULL,
+                    kind VARCHAR NOT NULL CHECK (kind IN ('activity', 'expense')),
+                    spool_path VARCHAR NOT NULL,
+                    caption TEXT,
+                    status VARCHAR NOT NULL CHECK (
+                        status IN ('queued', 'processing', 'retry_wait', 'imported', 'needs_review')
+                    ),
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    lease_owner VARCHAR,
+                    lease_expires_at TIMESTAMP,
+                    error_code VARCHAR,
+                    error_text TEXT,
+                    result_json JSON,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    UNIQUE (source_channel, source_message_id, content_hash, kind)
+                )
+            """)
+            con.execute("""
+                INSERT INTO media_ingestion_jobs_kind_migration
+                SELECT * FROM media_ingestion_jobs
+            """)
+            con.execute("DROP TABLE media_ingestion_jobs")
+            con.execute("ALTER TABLE media_ingestion_jobs_kind_migration RENAME TO media_ingestion_jobs")
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
 
     con.execute("""
         CREATE TABLE IF NOT EXISTS derived_artifacts (

@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Callable
 from zoneinfo import ZoneInfo
 
@@ -26,10 +27,12 @@ from agent.outbox import enqueue_event
 from agent.request_trace import RequestTrace, use_trace
 from config.settings import DB_PATH, OPENCLAW_MEDIA_STATE_PATH
 from ingestion.health import IMAGE_EXTS, PROCESSED_DIR, process_image
+from ingestion import spending
 from ingestion.schema import init_db
 
 PHOENIX = ZoneInfo("America/Phoenix")
 JOB_STATUSES = {"queued", "processing", "retry_wait", "imported", "needs_review"}
+JOB_KINDS = {"activity", "expense"}
 RETRY_DELAYS_SECONDS = (60, 300, 900)
 DEFAULT_LEASE_SECONDS = 20 * 60
 HEARTBEAT_SECONDS = 60
@@ -73,7 +76,8 @@ def _copy_to_spool(image_path: Path, spool_dir: Path, content_hash: str) -> Path
     return destination
 
 
-def enqueue_activity(
+def enqueue_media(
+    kind: str,
     image_path: Path,
     caption: str | None,
     source_channel: str,
@@ -82,6 +86,8 @@ def enqueue_activity(
     spool_dir: Path | None = None,
 ) -> dict:
     """Spool an exact attachment and idempotently create its durable job."""
+    if kind not in JOB_KINDS:
+        raise ValueError(f"Unsupported media job kind: {kind}")
     image_path = image_path.resolve()
     if not image_path.is_file():
         raise FileNotFoundError(image_path)
@@ -91,7 +97,7 @@ def enqueue_activity(
         raise ValueError("Source channel and message ID are required.")
 
     content_hash = _content_hash(image_path)
-    job_id = _job_id(source_channel, source_message_id, "activity", content_hash)
+    job_id = _job_id(source_channel, source_message_id, kind, content_hash)
     resolved_spool_dir = spool_dir or _default_spool_dir()
     spool_path = resolved_spool_dir / f"{content_hash}{image_path.suffix.lower()}"
 
@@ -99,7 +105,7 @@ def enqueue_activity(
         init_db(db_path)
     except Exception as error:
         trace = RequestTrace(
-            operation="activity_import",
+            operation=f"{kind}_import",
             source=source_channel,
             request_id=job_id,
         ).start(
@@ -120,7 +126,7 @@ def enqueue_activity(
         ).fetchone()
         if existing is None:
             trace = RequestTrace(
-                operation="activity_import",
+                operation=f"{kind}_import",
                 source=source_channel,
                 request_id=job_id,
             ).start(
@@ -136,7 +142,7 @@ def enqueue_activity(
                 INSERT INTO media_ingestion_jobs (
                     id, content_hash, source_channel, source_message_id,
                     kind, spool_path, caption, status
-                ) VALUES (?, ?, ?, ?, 'activity', ?, ?, 'queued')
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')
                 ON CONFLICT DO NOTHING
                 """,
                 [
@@ -144,6 +150,7 @@ def enqueue_activity(
                     content_hash,
                     source_channel,
                     source_message_id,
+                    kind,
                     str(spool_path),
                     caption,
                 ],
@@ -166,6 +173,26 @@ def enqueue_activity(
         raise
     finally:
         con.close()
+
+
+def enqueue_activity(
+    image_path: Path,
+    caption: str | None,
+    source_channel: str,
+    source_message_id: str,
+    db_path: Path = DB_PATH,
+    spool_dir: Path | None = None,
+) -> dict:
+    """Backward-compatible activity enqueue entry point."""
+    return enqueue_media(
+        "activity",
+        image_path,
+        caption,
+        source_channel,
+        source_message_id,
+        db_path,
+        spool_dir,
+    )
 
 
 def _row_to_job(description, row) -> dict | None:
@@ -315,7 +342,7 @@ def _format_pace(seconds: int | None, unit: str) -> str:
     return f"{minutes}:{seconds:02d}/{unit}"
 
 
-def _success_message(records: list[dict]) -> str:
+def _activity_success_message(records: list[dict]) -> str:
     summaries = []
     for activity in records:
         activity_type = activity.get("activity_type", "other")
@@ -336,6 +363,75 @@ def _success_message(records: list[dict]) -> str:
             f"avg pace: {pace}; avg HR: {activity.get('avg_hr', 'not detected')} bpm."
         )
     return "\n".join(summaries) or "Activity import completed, but no activity details were returned."
+
+
+def _count_label(count: int, singular: str, plural: str | None = None) -> str:
+    return f"{count} {singular if count == 1 else (plural or f'{singular}s')}"
+
+
+def _expense_success_message(result: dict) -> str:
+    rows = result.get("transactions") if isinstance(result, dict) else []
+    rows = rows if isinstance(rows, list) else []
+    pending = int(result.get("skipped_pending", 0))
+    duplicates = int(result.get("skipped_duplicates", 0))
+    invalid = int(result.get("skipped_invalid", 0))
+    skipped = []
+    if pending:
+        skipped.append(_count_label(pending, "pending charge"))
+    if duplicates:
+        skipped.append(_count_label(duplicates, "existing duplicate"))
+    if invalid:
+        skipped.append(_count_label(invalid, "invalid row"))
+    if not rows:
+        if pending and not duplicates and not invalid:
+            return f"No posted transactions imported; skipped {_count_label(pending, 'pending charge')}."
+        if duplicates and not pending and not invalid:
+            return f"No new transactions; skipped {_count_label(duplicates, 'existing duplicate')}."
+        if skipped:
+            return f"No new transactions imported; skipped {', '.join(skipped)}."
+        return "Could not identify any supported transactions with a merchant, amount, and date."
+    total = sum(Decimal(str(row["amount"])) for row in rows)
+    lines = [
+        f"{row['id'][:8]} — {row['merchant']}: ${Decimal(str(row['amount'])):.2f} ({row['category']})"
+        for row in rows
+    ]
+    transaction_lines = "\n".join(lines)
+    skipped_text = f"\nSkipped {', '.join(skipped)}." if skipped else ""
+    return (
+        f"Imported {len(rows)} spending transaction{'s' if len(rows) != 1 else ''} — ${total:.2f}\n"
+        f"{transaction_lines}{skipped_text}"
+    )
+
+
+def _success_message(job: dict, result: list[dict] | dict) -> str:
+    if job["kind"] == "expense":
+        return _expense_success_message(result)
+    return _activity_success_message(result)
+
+
+def _result_count(job: dict, result: list[dict] | dict) -> int:
+    if job["kind"] == "expense":
+        return len(result.get("transactions", []))
+    return len(result)
+
+
+def _validate_result(job: dict, result: list[dict] | dict) -> None:
+    if job["kind"] == "expense":
+        if not isinstance(result, dict):
+            raise ValueError("Spending importer returned an invalid result.")
+        rows = result.get("transactions")
+        if not isinstance(rows, list):
+            raise ValueError("Spending importer returned an invalid transaction list.")
+        skipped = sum(
+            int(result.get(key, 0))
+            for key in ("skipped_pending", "skipped_duplicates", "skipped_invalid")
+        )
+        if not rows and not skipped:
+            raise ValueError(
+                "Could not identify any supported transactions with a merchant, amount, and date."
+            )
+    elif not isinstance(result, list) or not result:
+        raise ValueError("Activity importer returned no activity records.")
 
 
 def _retryable_error(error: Exception) -> bool:
@@ -369,9 +465,9 @@ def _record_terminal_event(
     enqueue_event(con, event_id_for(dedupe_key))
 
 
-def _finish_success(db_path: Path, job: dict, records: list[dict]) -> None:
+def _finish_success(db_path: Path, job: dict, result: list[dict] | dict) -> None:
     now = _utcnow()
-    message = _success_message(records)
+    message = _success_message(job, result)
     con = duckdb.connect(str(db_path))
     try:
         con.execute("BEGIN TRANSACTION")
@@ -383,7 +479,7 @@ def _finish_success(db_path: Path, job: dict, records: list[dict]) -> None:
                 error_code = NULL, error_text = NULL
             WHERE id = ? AND status = 'processing' AND lease_owner = ?
             """,
-            [json.dumps(records, default=str, sort_keys=True), now, now, job["id"], job["lease_owner"]],
+            [json.dumps(result, default=str, sort_keys=True), now, now, job["id"], job["lease_owner"]],
         )
         _record_terminal_event(con, job, message, success=True)
         con.execute("COMMIT")
@@ -428,8 +524,9 @@ def _finish_failure(db_path: Path, job: dict, error: Exception) -> str:
             ],
         )
         if status == "needs_review":
+            label = "Expense" if job["kind"] == "expense" else "Activity"
             message = (
-                f"Activity job {job['id'][:8]} could not be imported. "
+                f"{label} job {job['id'][:8]} could not be imported. "
                 f"It is saved for review; retry with `python -m scripts.media_ingestion retry --job {job['id'][:8]}`."
             )
             _record_terminal_event(con, job, message, success=False)
@@ -445,7 +542,7 @@ def _finish_failure(db_path: Path, job: dict, error: Exception) -> str:
 def process_one_job(
     db_path: Path = DB_PATH,
     worker_id: str | None = None,
-    processor: Callable[[Path, date | None, str | None], list[dict]] = process_image,
+    processor: Callable[[Path, date | None, str | None], list[dict] | dict] | None = None,
     heartbeat_interval: int = HEARTBEAT_SECONDS,
 ) -> dict | None:
     """Claim and process one job; return its resulting state for tests and operators."""
@@ -455,7 +552,7 @@ def process_one_job(
         return None
 
     trace = RequestTrace(
-        operation="activity_import",
+        operation=f"{job['kind']}_import",
         source=job["source_channel"],
         request_id=job["id"],
         started_at=job["created_at"],
@@ -465,16 +562,29 @@ def process_one_job(
         try:
             reference_date = datetime.fromtimestamp(spool_path.stat().st_mtime, PHOENIX).date()
             date_hint = _date_hint_from_caption(job.get("caption"))
+            selected_processor = processor
+            if selected_processor is None:
+                if job["kind"] == "expense":
+                    selected_processor = lambda path, upload_date, _: spending.process_image(
+                        path,
+                        upload_date,
+                        db_path=db_path,
+                        processed_dir=path.parent,
+                    )
+                else:
+                    selected_processor = process_image
             with LeaseHeartbeat(
                 db_path,
                 job["id"],
                 worker_id,
                 interval_seconds=heartbeat_interval,
             ):
-                records = processor(spool_path, reference_date, date_hint)
-            _finish_success(db_path, job, records)
-            trace.end("passed", job_id=job["id"], records=len(records))
-            return {"id": job["id"], "status": "imported", "records": len(records)}
+                result = selected_processor(spool_path, reference_date, date_hint)
+            _validate_result(job, result)
+            _finish_success(db_path, job, result)
+            record_count = _result_count(job, result)
+            trace.end("passed", job_id=job["id"], records=record_count)
+            return {"id": job["id"], "status": "imported", "records": record_count}
         except Exception as error:
             status = _finish_failure(db_path, job, error)
             if status == "needs_review":
@@ -649,7 +759,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     enqueue_parser = subparsers.add_parser("enqueue")
-    enqueue_parser.add_argument("--kind", choices=["activity"], default="activity")
+    enqueue_parser.add_argument("--kind", choices=sorted(JOB_KINDS), default="activity")
     enqueue_parser.add_argument("--image", type=Path, required=True)
     enqueue_parser.add_argument("--caption")
     enqueue_parser.add_argument("--channel", required=True)
@@ -673,7 +783,8 @@ def main() -> None:
 
     args = parser.parse_args()
     if args.command == "enqueue":
-        result = enqueue_activity(
+        result = enqueue_media(
+            args.kind,
             args.image,
             args.caption,
             args.channel,

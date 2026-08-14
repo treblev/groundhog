@@ -42,12 +42,11 @@ their error in the same combined record.
 
 - OpenClaw agent turns through `groundhog-request-trace`
 - `/ask`, including LangGraph model calls, verifier calls, and MCP tool calls
-- asynchronous activity uploads and every Qwen attempt/retry
-- `/expense` vision calls
+- asynchronous activity and `/expense` uploads, including every Qwen attempt/retry
 - stock-note operations and their local embedding calls
 
 The Python tracer is Groundhog-owned because `/ask`, activity processing, and
-expense processing run outside OpenClaw's model lifecycle hooks.
+media-queue processing runs outside OpenClaw's model lifecycle hooks.
 
 ## Inspection
 

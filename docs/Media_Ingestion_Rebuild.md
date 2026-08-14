@@ -48,38 +48,39 @@ For the first version of the rebuild:
   upload.
 - An optional caption is metadata only. A date token may fill a date that is
   missing or unreadable in the image; it does not trigger the route.
-- `/expense` continues through the existing explicit expense command and is not
-  claimed as a bare activity.
+- `/expense` remains an explicit deterministic command, but it queues a durable
+  `expense` job instead of running Qwen synchronously. It is not claimed as a
+  bare activity.
 - Workout-plan and sleep ingestion retain their explicit workflows until they
   are migrated to the same durable job system. The activity rebuild must not
   silently classify a bare image as plan, sleep, or spending.
 
 The bot sends exactly two possible messages for one accepted upload:
 
-1. Immediate receipt: `Activity received — job <short-id> is processing.`
+1. Immediate receipt: `Activity received — ...` or `Expense received — ...`.
 2. One terminal result: an imported metric summary or a concise failure with
    the job ID and retry instruction.
 
 There are no “let me check,” vision interpretations, speculative causes, or
 requests to resend while the original job still exists.
 
-This is intentionally one intake plugin, one table, and one worker. The durable
-job boundary is necessary because local vision inference can outlive a Telegram
-turn or Gateway process. Running Qwen synchronously inside the plugin would be
-shorter code, but a Gateway restart would lose the only record of the upload.
+This is intentionally one durable table and one worker, with deterministic
+activity and `/expense` ingress plugins. The durable job boundary is necessary
+because local vision inference can outlive a Telegram turn or Gateway process.
+Running Qwen synchronously inside either plugin would make a Gateway restart
+lose the only record of the upload.
 
 ## Architecture
 
 ```text
-Telegram image
+Telegram bare image or image captioned /expense
     |
     v
-OpenClaw groundhog-media-ingress plugin
-  reply_dispatch hook, before chat-model dispatch
-  - owner + Telegram DM + image guard
-  - exact ctx.MediaPaths attachment
+OpenClaw deterministic ingress plugin
+  - bare image: groundhog-media-ingress reply_dispatch hook
+  - /expense: groundhog-spending-router command
   - copy into Groundhog-owned spool
-  - enqueue one DuckDB job
+  - enqueue one typed DuckDB job
   - send receipt and mark turn handled
     |
     v
@@ -88,7 +89,7 @@ media_ingestion_jobs (durable queue)
     v
 groundhog-media-worker.service
   - claims one job with a lease
-  - invokes the activity importer
+  - invokes the activity or spending importer selected by job kind
   - waits for local Qwen to finish
   - records imported / needs_review / retry_wait
   - queues one terminal outbox event
@@ -115,7 +116,7 @@ argument array:
 
 ```text
 python -m scripts.media_ingestion enqueue
-  --kind activity
+  --kind activity|expense
   --image <exact-current-media-path>
   --caption <current-caption>
   --channel telegram
@@ -140,7 +141,7 @@ CREATE TABLE IF NOT EXISTS media_ingestion_jobs (
     content_hash VARCHAR NOT NULL,
     source_channel VARCHAR NOT NULL,
     source_message_id VARCHAR NOT NULL,
-    kind VARCHAR NOT NULL CHECK (kind IN ('activity')),
+    kind VARCHAR NOT NULL CHECK (kind IN ('activity', 'expense')),
     spool_path VARCHAR NOT NULL,
     caption TEXT,
     status VARCHAR NOT NULL CHECK (
@@ -180,8 +181,8 @@ The worker:
 
 1. Atomically claims one available job and sets a lease.
 2. Increments `attempt_count` before processing.
-3. Calls the existing activity parser with the spooled image and optional date
-   hint.
+3. Dispatches `activity` jobs to the activity parser and `expense` jobs to the
+   spending parser. The parsers retain separate prompts and validation rules.
 4. Waits for the local LAN Ollama/Qwen request to complete. The HTTP client
    timeout remains explicit and long enough for the configured model.
 5. Writes the result and terminal event in one database transaction.
@@ -218,7 +219,8 @@ and same spooled image.
 - The source message ID plus content hash prevents duplicate Telegram delivery
   from creating duplicate jobs.
 - The content-addressed spool prevents duplicate file copies.
-- Existing activity upserts prevent duplicate canonical rows.
+- Existing activity upserts and spending image/merchant deduplication prevent
+  duplicate canonical rows.
 - The terminal event uses
   `media_ingestion:<job-id>:attempt:<attempt-number>:terminal` as its dedupe key,
   so one processing attempt cannot deliver twice. An explicit operator retry
