@@ -3,8 +3,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { createMediaIngressHandler, currentImagePaths, routeDecision, runEnqueue } from "./core.js";
+
+const REPOSITORY_ROOT = resolve(fileURLToPath(new URL("../../../..", import.meta.url)));
 
 function event(overrides = {}) {
   return {
@@ -104,8 +107,8 @@ test("spawn boundary invokes the durable Python enqueue CLI idempotently", async
     const spoolDir = join(root, "spool");
     await writeFile(imagePath, "exact attachment");
     const options = {
-      python: resolve("venv/bin/python"),
-      appDir: process.cwd(),
+      python: join(REPOSITORY_ROOT, "venv/bin/python"),
+      appDir: REPOSITORY_ROOT,
       dbPath,
       spoolDir,
       imagePath,
