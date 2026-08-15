@@ -9,7 +9,8 @@ import hashlib
 import json
 import re
 import shutil
-from datetime import date
+import time
+from datetime import date, datetime, timezone
 from typing import Optional
 
 import duckdb
@@ -17,6 +18,7 @@ import httpx
 
 from config.settings import DB_PATH, OLLAMA_CHAT_URL, WORKOUTS_DROP_FOLDER, OLLAMA_VISION_MODEL
 from agent.events import record_event
+from agent.request_trace import record_llm_call
 
 OLLAMA_URL = OLLAMA_CHAT_URL
 PROCESSED_DIR = WORKOUTS_DROP_FOLDER / "processed"
@@ -71,9 +73,31 @@ def _query_ollama(image_path: Path) -> str:
         "messages": [{"role": "user", "content": PROMPT, "images": [_encode_image(image_path)]}],
         "stream": False,
     }
-    response = httpx.post(OLLAMA_URL, json=payload, timeout=600.0)
-    response.raise_for_status()
-    return response.json()["message"]["content"]
+    started_at = datetime.now(timezone.utc)
+    monotonic_started = time.monotonic()
+    try:
+        response = httpx.post(OLLAMA_URL, json=payload, timeout=600.0)
+        response.raise_for_status()
+        content = response.json()["message"]["content"]
+    except Exception as error:
+        record_llm_call(
+            started_at=started_at,
+            monotonic_started=monotonic_started,
+            model=OLLAMA_VISION_MODEL,
+            prompt=PROMPT,
+            error=error,
+            metadata={"operation": "workout_plan_import", "image_path": image_path},
+        )
+        raise
+    record_llm_call(
+        started_at=started_at,
+        monotonic_started=monotonic_started,
+        model=OLLAMA_VISION_MODEL,
+        prompt=PROMPT,
+        response=content,
+        metadata={"operation": "workout_plan_import", "image_path": image_path},
+    )
+    return content
 
 
 def _parse_workouts(raw: str) -> list[dict]:

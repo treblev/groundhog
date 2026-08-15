@@ -17,8 +17,9 @@ must not depend on the chat model deciding which tool to call.
 - Trigger: attach one Wallet or bank transaction-list screenshot to Telegram
   with `/expense` as its caption.
 - OpenClaw owner: `groundhog-spending-router` command `expense`.
-- Groundhog entrypoint: `python -m ingestion.spending import`.
-- Inputs: image path, Phoenix-local upload date, and media-checkpoint path.
+- Groundhog entrypoint: `python -m scripts.media_ingestion enqueue --kind expense`.
+- Inputs: exact image path, stable attachment identity, and Phoenix-local upload
+  date derived by the worker from the spooled file.
 - Output: imported count, total, merchant, amount, category, short transaction
   ID, and skipped-row counts.
 - Supported date labels: recent relative times, `Today`, `Yesterday`, weekday
@@ -59,20 +60,23 @@ OpenClaw registered command
         ↓
 locate the attachment received with that message
         ↓
-Groundhog local vision extraction
+copy to durable spool and enqueue expense job
+        ↓
+immediately return the short job ID
+        ↓
+media worker runs Groundhog local vision extraction
         ↓
 normalize dates, amounts, status, and category
         ↓
 deduplicate and insert posted rows into DuckDB
         ↓
-archive source image and mark media checkpoint
+retain processed image for 15 days
         ↓
-return one concise Telegram result
+queue one concise terminal result for Telegram delivery
 ```
 
-No LangGraph or MCP step is involved in the import path. The periodic activity
-watcher is checkpointed after a successful expense attempt so it does not
-interpret the same image as a workout or activity screenshot.
+No LangGraph or MCP step is involved in the import path. The explicit command
+prevents the bare-activity hook from claiming the same Telegram update.
 
 ## Data and Idempotency Design
 
@@ -110,6 +114,8 @@ Run locally:
 
 ```bash
 python -m unittest tests.test_spending_ingestion
+python -m unittest tests.test_media_ingestion
+node --test deploy/openclaw/plugins/groundhog-spending-router/core.test.js
 python -m unittest discover -s tests -p 'test_*.py'
 ```
 

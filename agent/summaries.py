@@ -1,11 +1,13 @@
 """Local-only LLM summaries over durable Groundhog facts."""
 import hashlib
-from datetime import date, timedelta
+import time
+from datetime import date, datetime, timedelta, timezone
 
 import duckdb
 import httpx
 
 from config.settings import OLLAMA_CHAT_URL, OLLAMA_SQL_MODEL
+from agent.request_trace import record_llm_call
 
 
 def _artifact_id(artifact_type: str, period_start: date, period_end: date) -> str:
@@ -14,23 +16,43 @@ def _artifact_id(artifact_type: str, period_start: date, period_end: date) -> st
 
 
 def _ask_local_model(prompt: str) -> str:
-    response = httpx.post(
-        OLLAMA_CHAT_URL,
-        json={
-            "model": OLLAMA_SQL_MODEL,
-            "stream": False,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "Summarize only the supplied local facts. Do not give financial advice or invent missing facts.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-        },
-        timeout=120.0,
+    system_prompt = "Summarize only the supplied local facts. Do not give financial advice or invent missing facts."
+    started_at = datetime.now(timezone.utc)
+    monotonic_started = time.monotonic()
+    try:
+        response = httpx.post(
+            OLLAMA_CHAT_URL,
+            json={
+                "model": OLLAMA_SQL_MODEL,
+                "stream": False,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+            },
+            timeout=120.0,
+        )
+        response.raise_for_status()
+        content = response.json()["message"]["content"].strip()
+    except Exception as error:
+        record_llm_call(
+            started_at=started_at,
+            monotonic_started=monotonic_started,
+            model=OLLAMA_SQL_MODEL,
+            prompt={"system": system_prompt, "user": prompt},
+            error=error,
+            metadata={"operation": "summary_generation"},
+        )
+        raise
+    record_llm_call(
+        started_at=started_at,
+        monotonic_started=monotonic_started,
+        model=OLLAMA_SQL_MODEL,
+        prompt={"system": system_prompt, "user": prompt},
+        response=content,
+        metadata={"operation": "summary_generation"},
     )
-    response.raise_for_status()
-    return response.json()["message"]["content"].strip()
+    return content
 
 
 def _store_artifact(

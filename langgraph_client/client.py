@@ -7,6 +7,8 @@ import asyncio
 import json
 import os
 import re
+import time
+from datetime import datetime, timezone
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
@@ -23,6 +25,8 @@ from mcp import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
 
 from config.settings import OLLAMA_BASE_URL, OLLAMA_SQL_MODEL
+from agent.langchain_trace import GroundhogTraceCallback
+from agent.request_trace import RequestTrace, record_tool_call, use_trace
 
 SERVER_SCRIPT = str(Path(__file__).resolve().parent.parent / "mcp_server" / "server.py")
 
@@ -50,9 +54,10 @@ class DatabaseGroundingMiddleware(AgentMiddleware):
 
     _CORRECTION_MARKER = "[Grounding verifier correction]"
 
-    def __init__(self, verifier_model=None, prefetched_evidence: str = ""):
+    def __init__(self, verifier_model=None, prefetched_evidence: str = "", trace_callback=None):
         super().__init__()
         self.prefetched_evidence = prefetched_evidence.strip()
+        self.trace_callback = trace_callback
         self.verifier_model = verifier_model or ChatOllama(
             model=OLLAMA_SQL_MODEL,
             base_url=OLLAMA_BASE_URL,
@@ -97,9 +102,16 @@ class DatabaseGroundingMiddleware(AgentMiddleware):
             f"Proposed answer:\n{answer.content}"
         )
         try:
-            response = await self.verifier_model.ainvoke(
-                [SystemMessage(content="You are a strict evidence verifier."), HumanMessage(content=prompt)]
-            )
+            messages = [
+                SystemMessage(content="You are a strict evidence verifier."),
+                HumanMessage(content=prompt),
+            ]
+            if self.trace_callback:
+                response = await self.verifier_model.ainvoke(
+                    messages, config={"callbacks": [self.trace_callback]}
+                )
+            else:
+                response = await self.verifier_model.ainvoke(messages)
             match = re.search(r"\{.*\}", str(response.content), re.DOTALL)
             verdict = json.loads(match.group()) if match else {}
             if isinstance(verdict.get("grounded"), bool):
@@ -142,8 +154,9 @@ class InternalDetailsMiddleware(AgentMiddleware):
         "but I can't provide internal implementation details."
     )
 
-    def __init__(self, verifier_model=None):
+    def __init__(self, verifier_model=None, trace_callback=None):
         super().__init__()
+        self.trace_callback = trace_callback
         self.verifier_model = verifier_model or ChatOllama(
             model=OLLAMA_SQL_MODEL,
             base_url=OLLAMA_BASE_URL,
@@ -176,9 +189,16 @@ class InternalDetailsMiddleware(AgentMiddleware):
             f"User question:\n{question}\n\nProposed answer:\n{answer.content}"
         )
         try:
-            response = await self.verifier_model.ainvoke(
-                [SystemMessage(content="You are a strict user-facing response safety reviewer."), HumanMessage(content=prompt)]
-            )
+            messages = [
+                SystemMessage(content="You are a strict user-facing response safety reviewer."),
+                HumanMessage(content=prompt),
+            ]
+            if self.trace_callback:
+                response = await self.verifier_model.ainvoke(
+                    messages, config={"callbacks": [self.trace_callback]}
+                )
+            else:
+                response = await self.verifier_model.ainvoke(messages)
             match = re.search(r"\{.*\}", str(response.content), re.DOTALL)
             verdict = json.loads(match.group()) if match else {}
             if isinstance(verdict.get("safe"), bool):
@@ -212,14 +232,19 @@ class InternalDetailsMiddleware(AgentMiddleware):
         return Command(goto="model", update={"messages": [correction]})
 
 
-def _make_middleware(prefetched_evidence: str = "") -> list[AgentMiddleware]:
+def _make_middleware(
+    prefetched_evidence: str = "", trace_callback=None
+) -> list[AgentMiddleware]:
     """Return the local-only safety and planning middleware for the agent."""
     return [
         ToolRetryMiddleware(max_retries=2, initial_delay=0, jitter=False),
         ToolCallLimitMiddleware(run_limit=12, exit_behavior="continue"),
         TodoListMiddleware(),
-        InternalDetailsMiddleware(),
-        DatabaseGroundingMiddleware(prefetched_evidence=prefetched_evidence),
+        InternalDetailsMiddleware(trace_callback=trace_callback),
+        DatabaseGroundingMiddleware(
+            prefetched_evidence=prefetched_evidence,
+            trace_callback=trace_callback,
+        ),
     ]
 
 
@@ -322,8 +347,33 @@ def _resolve_search_domain(domain: str | None, ticker: str | None) -> str:
     return "stock_note" if ticker else "workout"
 
 
+async def _traced_setup_tool(session: ClientSession, name: str, arguments: dict):
+    """Trace MCP calls made while constructing context before agent execution."""
+    started_at = datetime.now(timezone.utc)
+    monotonic_started = time.monotonic()
+    try:
+        result = await session.call_tool(name, arguments)
+    except Exception as error:
+        record_tool_call(
+            started_at=started_at,
+            monotonic_started=monotonic_started,
+            tool=name,
+            arguments=arguments,
+            error=error,
+        )
+        raise
+    record_tool_call(
+        started_at=started_at,
+        monotonic_started=monotonic_started,
+        tool=name,
+        arguments=arguments,
+        result=result,
+    )
+    return result
+
+
 async def _build_schema(session: ClientSession) -> str:
-    schema_result = await session.call_tool("run_sql", {"query": "SHOW TABLES"})
+    schema_result = await _traced_setup_tool(session, "run_sql", {"query": "SHOW TABLES"})
     tables_raw = schema_result.content[0].text if schema_result.content else ""
     tables = [
         line.strip()
@@ -335,7 +385,7 @@ async def _build_schema(session: ClientSession) -> str:
 
     schema_parts = []
     for table in tables:
-        desc = await session.call_tool("run_sql", {"query": f"DESCRIBE {table}"})
+        desc = await _traced_setup_tool(session, "run_sql", {"query": f"DESCRIBE {table}"})
         col_text = desc.content[0].text if desc.content else ""
         note = ""
         if table == "stock_signals":
@@ -345,9 +395,9 @@ async def _build_schema(session: ClientSession) -> str:
         elif table == "stock_notes":
             note = "  -- current user-authored ticker notes; exclude is_deleted=true rows for active-note listings"
         elif table == "workouts":
-            types_result = await session.call_tool("run_sql", {"query": "SELECT DISTINCT structure_type FROM workouts WHERE structure_type IS NOT NULL"})
+            types_result = await _traced_setup_tool(session, "run_sql", {"query": "SELECT DISTINCT structure_type FROM workouts WHERE structure_type IS NOT NULL"})
             types = [line.strip() for line in types_result.content[0].text.splitlines() if line.strip() and line.strip() != "structure_type"]
-            cats_result = await session.call_tool("run_sql", {"query": "SELECT DISTINCT category FROM workouts WHERE category IS NOT NULL"})
+            cats_result = await _traced_setup_tool(session, "run_sql", {"query": "SELECT DISTINCT category FROM workouts WHERE category IS NOT NULL"})
             cats = [line.strip() for line in cats_result.content[0].text.splitlines() if line.strip() and line.strip() != "category"]
             note = f"  -- structure_types: {', '.join(types)}; categories: {', '.join(cats)}"
         schema_parts.append(f"{table}({col_text[:200]}){note}")
@@ -416,7 +466,8 @@ def _table_values(text: str, header: str) -> list[str]:
 
 async def _prefetch_stock_notes(session: ClientSession, question: str) -> str:
     """Retrieve arbitrary user notes for ticker-specific or broader stock questions."""
-    result = await session.call_tool(
+    result = await _traced_setup_tool(
+        session,
         "run_sql",
         {"query": "SELECT DISTINCT ticker FROM stock_notes WHERE NOT is_deleted ORDER BY ticker"},
     )
@@ -436,7 +487,8 @@ async def _prefetch_stock_notes(session: ClientSession, question: str) -> str:
         }
         if ticker:
             arguments["ticker"] = ticker
-        result = await session.call_tool(
+        result = await _traced_setup_tool(
+            session,
             "search_documents",
             arguments,
         )
@@ -451,36 +503,53 @@ async def ask_question(question: str) -> str:
     if not question:
         raise ValueError("question must not be empty")
 
-    params = StdioServerParameters(
-        command=sys.executable,
-        args=[SERVER_SCRIPT],
-        env=dict(os.environ),
-    )
-
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-
-            schema = await _build_schema(session)
-            stock_note_context = await _prefetch_stock_notes(session, question)
-            tools = _make_tools(session)
-
-            agent = create_agent(
-                model=ChatOllama(
-                    model=OLLAMA_SQL_MODEL,
-                    base_url=OLLAMA_BASE_URL,
-                    temperature=0,
-                ),
-                tools=tools,
-                middleware=_make_middleware(prefetched_evidence=stock_note_context),
-                system_prompt=_system_prompt(schema, stock_note_context),
+    trace = RequestTrace(
+        operation="ask",
+        source=os.environ.get("GROUNDHOG_REQUEST_SOURCE", "groundhog_cli"),
+    ).start(question=question)
+    callback = GroundhogTraceCallback()
+    with use_trace(trace):
+        try:
+            params = StdioServerParameters(
+                command=sys.executable,
+                args=[SERVER_SCRIPT],
+                env=dict(os.environ),
             )
 
-            result = await agent.ainvoke({"messages": [{"role": "user", "content": question}]})
-            answer = str(result["messages"][-1].content).strip()
-            if answer:
-                return answer
-            raise RuntimeError("Groundhog agent returned an empty answer")
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+
+                    schema = await _build_schema(session)
+                    stock_note_context = await _prefetch_stock_notes(session, question)
+                    tools = _make_tools(session)
+
+                    agent = create_agent(
+                        model=ChatOllama(
+                            model=OLLAMA_SQL_MODEL,
+                            base_url=OLLAMA_BASE_URL,
+                            temperature=0,
+                        ),
+                        tools=tools,
+                        middleware=_make_middleware(
+                            prefetched_evidence=stock_note_context,
+                            trace_callback=callback,
+                        ),
+                        system_prompt=_system_prompt(schema, stock_note_context),
+                    )
+
+                    result = await agent.ainvoke(
+                        {"messages": [{"role": "user", "content": question}]},
+                        config={"callbacks": [callback]},
+                    )
+                    answer = str(result["messages"][-1].content).strip()
+                    if not answer:
+                        raise RuntimeError("Groundhog agent returned an empty answer")
+        except Exception as error:
+            trace.end("failed", str(error))
+            raise
+        trace.end("passed", final_response=answer)
+        return answer
 
 
 async def run():

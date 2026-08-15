@@ -130,12 +130,13 @@ It calls `get_pending_outbox`, sends each pending message with
 `openclaw message send --channel telegram`, and calls `mark_outbox_delivered`
 only after Telegram delivery succeeds.
 
-OpenClaw cron runs the bridge every 15 minutes:
+OpenClaw cron runs the bridge every 30 seconds so completed jobs reach Telegram
+promptly while retaining durable outbox delivery:
 
 ```text
 name: groundhog-outbox-telegram
 id: 201d4f1c-6ad5-41b3-859f-2b8ab70f3ab3
-schedule: every 15m
+schedule: every 30s
 delivery.mode: none
 env: GROUNDHOG_DB_PATH, OPENCLAW_TELEGRAM_TARGET
 ```
@@ -178,10 +179,12 @@ returns to activity-result mode.
 
 The `groundhog-spending-router` plugin lives at
 `deploy/openclaw/plugins/groundhog-spending-router`. It registers `/expense` as
-a direct Telegram command that runs before the chat model. It invokes the local
-Wallet and bank transaction importer, archives the screenshot under Groundhog
-data, marks the media watcher checkpoint so it cannot be re-imported as an
-activity, and replies with imported transactions and their short IDs.
+a direct Telegram command that runs before the chat model. It copies the image
+into the durable media spool, creates a `kind=expense` job, and immediately
+replies with the short job ID. `groundhog-media-worker.service` later invokes
+the local Wallet and bank transaction importer; its terminal result enters the
+same outbox used by activity jobs and is delivered by the 30-second Telegram
+bridge.
 
 Correct a category later with:
 
@@ -215,7 +218,8 @@ Useful database checks:
 
 ```bash
 venv/bin/python -c "import duckdb; from config.settings import DB_PATH; con=duckdb.connect(str(DB_PATH)); print(con.execute('SELECT transaction_date, merchant, amount, category FROM spending ORDER BY transaction_date DESC, created_at DESC LIMIT 20').fetchall())"
-venv/bin/python -m unittest tests.test_spending_ingestion
+venv/bin/python -m unittest tests.test_spending_ingestion tests.test_media_ingestion
+node --test deploy/openclaw/plugins/groundhog-spending-router/core.test.js
 ```
 
 ## Ticker Semantic Notes
@@ -255,6 +259,25 @@ openclaw plugins inspect groundhog-ask-router --runtime --json
 Runtime inspection must show `status: loaded`, command `ask`, and no
 diagnostics. Ticker-specific and broader stock questions deterministically
 retrieve active user notes before the local model plans its answer.
+
+## Local Request Tracing
+
+Install the request tracer to capture ordinary OpenClaw agent turns. Direct
+Groundhog subprocesses such as `/ask`, `/expense`, stock notes, and asynchronous
+activity imports also write the same format themselves.
+
+```bash
+cd /home/openclaw/apps/groundhog
+openclaw plugins install /home/openclaw/apps/groundhog/deploy/openclaw/plugins/groundhog-request-trace
+openclaw plugins enable groundhog-request-trace
+systemctl --user restart openclaw-gateway.service
+openclaw plugins inspect groundhog-request-trace --runtime --json
+```
+
+Runtime inspection must show `status: loaded`, the LLM/tool lifecycle hooks,
+and no diagnostics. Logs are local at
+`/home/openclaw/data/groundhog/logs/request-traces/` and are retained for 15
+days. See `docs/Request_Tracing.md` for the record contract and `jq` examples.
 
 ## OpenClaw Stock Schedule
 

@@ -1,0 +1,19 @@
+{
+  "id": "groundhog-media-ingress",
+  "name": "Groundhog media ingress",
+  "description": "Durably queues exact owner Telegram DM activity attachments before model dispatch.",
+  "activation": {
+    "onStartup": true,
+    "onConfigPaths": ["plugins.entries.groundhog-media-ingress"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "appDir": {"type": "string"},
+      "python": {"type": "string"},
+      "dbPath": {"type": "string"},
+      "spoolDir": {"type": "string"}
+    }
+  }
+}

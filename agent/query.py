@@ -5,12 +5,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import json
 import re
+import time
+from datetime import datetime, timezone
 
 import duckdb
 import httpx
 
 from config.settings import DB_PATH, OLLAMA_CHAT_URL, OLLAMA_SQL_MODEL
 from agent.memory import remember, recall
+from agent.request_trace import record_llm_call
 
 OLLAMA_URL = OLLAMA_CHAT_URL
 MAX_TOOL_ROUNDS = 8
@@ -221,9 +224,31 @@ def _chat(messages: list, tools: bool = True) -> dict:
     }
     if tools:
         payload["tools"] = TOOLS
-    response = httpx.post(OLLAMA_URL, json=payload, timeout=600.0)
-    response.raise_for_status()
-    return response.json()["message"]
+    started_at = datetime.now(timezone.utc)
+    monotonic_started = time.monotonic()
+    try:
+        response = httpx.post(OLLAMA_URL, json=payload, timeout=600.0)
+        response.raise_for_status()
+        message = response.json()["message"]
+    except Exception as error:
+        record_llm_call(
+            started_at=started_at,
+            monotonic_started=monotonic_started,
+            model=OLLAMA_SQL_MODEL,
+            prompt=messages,
+            error=error,
+            metadata={"operation": "legacy_agent_query", "tools_enabled": tools},
+        )
+        raise
+    record_llm_call(
+        started_at=started_at,
+        monotonic_started=monotonic_started,
+        model=OLLAMA_SQL_MODEL,
+        prompt=messages,
+        response=message,
+        metadata={"operation": "legacy_agent_query", "tools_enabled": tools},
+    )
+    return message
 
 
 def _chat_with_retry(messages: list, tools: bool = True, max_retries: int = 2) -> dict:

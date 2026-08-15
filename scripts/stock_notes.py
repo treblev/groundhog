@@ -1,6 +1,7 @@
 """Manage user-authored semantic notes for stock tickers."""
 import argparse
 import json
+import os
 import re
 import sys
 import uuid
@@ -11,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import duckdb
 
 from agent.semantic_search import sync_stock_note_embeddings
+from agent.request_trace import RequestTrace, use_trace
 from config.settings import DB_PATH
 
 
@@ -210,17 +212,31 @@ def main() -> int:
     list_parser = subparsers.add_parser("list")
     list_parser.add_argument("ticker")
     args = parser.parse_args()
-    try:
-        if args.command == "add":
-            result = add_note(args.ticker, args.note)
-        elif args.command == "edit":
-            result = edit_note(args.note_id, args.note)
-        elif args.command == "delete":
-            result = delete_note(args.note_id)
-        else:
-            result = list_notes(args.ticker)
-    except ValueError as error:
-        parser.error(str(error))
+    metadata = {
+        key: value
+        for key, value in vars(args).items()
+        if key != "command"
+    }
+    trace = RequestTrace(
+        operation=f"stock_note_{args.command}",
+        source=os.environ.get("GROUNDHOG_REQUEST_SOURCE", "groundhog_cli"),
+    ).start(**metadata)
+    with use_trace(trace):
+        try:
+            if args.command == "add":
+                result = add_note(args.ticker, args.note)
+            elif args.command == "edit":
+                result = edit_note(args.note_id, args.note)
+            elif args.command == "delete":
+                result = delete_note(args.note_id)
+            else:
+                result = list_notes(args.ticker)
+        except Exception as error:
+            trace.end("failed", str(error))
+            if isinstance(error, ValueError):
+                parser.error(str(error))
+            raise
+        trace.end("passed", result=result)
     print(json.dumps(result, default=str, sort_keys=True))
     return 0
 

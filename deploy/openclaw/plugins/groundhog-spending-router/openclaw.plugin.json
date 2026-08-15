@@ -1,7 +1,7 @@
 {
   "id": "groundhog-spending-router",
   "name": "Groundhog spending router",
-  "description": "Deterministically imports Wallet and bank transaction screenshots captioned with /expense.",
+  "description": "Durably queues Wallet and bank transaction screenshots captioned with /expense.",
   "activation": {
     "onStartup": true,
     "onConfigPaths": ["plugins.entries.groundhog-spending-router"]
@@ -13,7 +13,9 @@
       "appDir": {"type": "string"},
       "python": {"type": "string"},
       "mediaRoot": {"type": "string"},
-      "mediaStatePath": {"type": "string"}
+      "mediaStatePath": {"type": "string"},
+      "dbPath": {"type": "string"},
+      "spoolDir": {"type": "string"}
     }
   }
 }
