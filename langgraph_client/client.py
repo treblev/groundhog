@@ -43,6 +43,28 @@ _STOCK_QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# These aliases are deliberately limited to unambiguous names used by the
+# stock-note workflow.  The target ticker is still filtered against the
+# canonical value in DuckDB; an alias whose ticker has no active notes should
+# therefore produce an explicit empty result rather than a broad search.
+_STOCK_TICKER_ALIASES = {
+    "bitcoin": "BTC-USD",
+    "btc": "BTC-USD",
+    "btc usd": "BTC-USD",
+    "booking holdings": "BKNG",
+    "booking.com": "BKNG",
+    "booking": "BKNG",
+    "microsoft": "MSFT",
+    "intel": "INTC",
+    "meta platforms": "META",
+    "facebook": "META",
+    "netflix": "NFLX",
+    "google": "GOOG",
+    "alphabet": "GOOG",
+    "tesla": "TSLA",
+    "mastercard": "MA",
+}
+
 
 class DatabaseGroundingMiddleware(AgentMiddleware):
     """Verify factual answers against this run's tool output and repair once."""
@@ -455,6 +477,21 @@ def _named_note_tickers(question: str, tickers: list[str]) -> list[str]:
     ]
 
 
+def _canonical_note_tickers(question: str, tickers: list[str]) -> list[str]:
+    """Resolve explicit tickers and unambiguous company aliases to canonical tickers."""
+    resolved: list[str] = []
+
+    for ticker in _named_note_tickers(question, tickers):
+        if ticker not in resolved:
+            resolved.append(ticker)
+
+    for alias, ticker in sorted(_STOCK_TICKER_ALIASES.items(), key=lambda item: -len(item[0])):
+        if re.search(rf"(?<![A-Z0-9]){re.escape(alias)}(?![A-Z0-9])", question, re.IGNORECASE):
+            if ticker not in resolved:
+                resolved.append(ticker)
+    return resolved
+
+
 def _table_values(text: str, header: str) -> list[str]:
     """Parse one-column run_sql output while ignoring its header."""
     return [
@@ -462,6 +499,34 @@ def _table_values(text: str, header: str) -> list[str]:
         for line in text.splitlines()
         if line.strip() and line.strip().lower() != header.lower()
     ]
+
+
+def _sql_literal(value: str) -> str:
+    """Quote a validated scalar for the MCP SQL fallback."""
+    if not re.fullmatch(r"[A-Z0-9.-]+", value, re.IGNORECASE):
+        raise ValueError(f"Invalid ticker for SQL fallback: {value}")
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _search_result_is_nonempty(text: str) -> bool:
+    """Recognize the JSON list returned by search_documents without guessing."""
+    try:
+        parsed = json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        return bool(text.strip()) and text.strip().lower() not in {"no results.", "no result."}
+    return bool(parsed)
+
+
+async def _sql_stock_note_fallback(session: ClientSession, ticker: str) -> str:
+    """Return exact active notes when ticker-filtered semantic search is empty."""
+    query = (
+        "SELECT id, ticker, note, created_at, updated_at "
+        "FROM stock_notes "
+        f"WHERE NOT is_deleted AND upper(ticker) = upper({_sql_literal(ticker)}) "
+        "ORDER BY created_at DESC, id LIMIT 10"
+    )
+    result = await _traced_setup_tool(session, "run_sql", {"query": query})
+    return result.content[0].text if result.content else "No results."
 
 
 async def _prefetch_stock_notes(session: ClientSession, question: str) -> str:
@@ -473,7 +538,7 @@ async def _prefetch_stock_notes(session: ClientSession, question: str) -> str:
     )
     ticker_text = result.content[0].text if result.content else ""
     tickers = _table_values(ticker_text, "ticker")
-    named_tickers = _named_note_tickers(question, tickers)
+    named_tickers = _canonical_note_tickers(question, tickers)
     if not named_tickers and not _STOCK_QUESTION_RE.search(question):
         return ""
 
@@ -493,7 +558,12 @@ async def _prefetch_stock_notes(session: ClientSession, question: str) -> str:
             arguments,
         )
         text = result.content[0].text if result.content else "[]"
-        evidence.append(f"{ticker or 'all active stock notes'}: {text}")
+        label = ticker or "all active stock notes"
+        if ticker and not _search_result_is_nonempty(text):
+            fallback = await _sql_stock_note_fallback(session, ticker)
+            evidence.append(f"{label} (sql_fallback): {fallback}")
+        else:
+            evidence.append(f"{label}: {text}")
     return "\n".join(evidence)
 
 

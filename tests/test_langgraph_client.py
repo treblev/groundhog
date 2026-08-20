@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from langgraph_client.client import (
     DatabaseGroundingMiddleware,
     InternalDetailsMiddleware,
+    _canonical_note_tickers,
     _make_middleware,
     _named_note_tickers,
     _prefetch_stock_notes,
@@ -33,6 +34,16 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
                 ["AAPL", "BKNG", "SHOP"],
             ),
             ["BKNG"],
+        )
+
+    def test_company_aliases_resolve_to_canonical_note_tickers(self):
+        self.assertEqual(
+            _canonical_note_tickers("What have I written about Bitcoin lately?", ["BTC-USD"]),
+            ["BTC-USD"],
+        )
+        self.assertEqual(
+            _canonical_note_tickers("Do I have notes on Microsoft?", ["BKNG"]),
+            ["MSFT"],
         )
 
     async def test_named_ticker_prefetches_all_stock_note_content(self):
@@ -58,6 +69,53 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.calls[1][0], "search_documents")
         self.assertEqual(session.calls[1][1]["domain"], "stock_note")
         self.assertEqual(session.calls[1][1]["ticker"], "BKNG")
+
+    async def test_alias_prefetch_uses_sql_fallback_when_semantic_search_is_empty(self):
+        class Session:
+            def __init__(self):
+                self.calls = []
+
+            async def call_tool(self, name, arguments):
+                self.calls.append((name, arguments))
+                if name == "run_sql":
+                    if len([call for call in self.calls if call[0] == "run_sql"]) == 1:
+                        text = "ticker\n  BTC-USD"
+                    else:
+                        text = "id ticker note\nnote-1 BTC-USD Weekly Supertrend flipped to buy"
+                else:
+                    text = "[]"
+                return SimpleNamespace(content=[SimpleNamespace(text=text)])
+
+        session = Session()
+        evidence = await _prefetch_stock_notes(session, "What have I written about Bitcoin lately?")
+
+        self.assertIn("BTC-USD (sql_fallback)", evidence)
+        self.assertIn("Weekly Supertrend flipped to buy", evidence)
+        self.assertEqual(session.calls[1][1]["ticker"], "BTC-USD")
+        self.assertIn("upper(ticker) = upper('BTC-USD')", session.calls[2][1]["query"])
+
+    async def test_alias_with_no_active_notes_returns_explicit_empty_fallback(self):
+        class Session:
+            def __init__(self):
+                self.calls = []
+
+            async def call_tool(self, name, arguments):
+                self.calls.append((name, arguments))
+                if name == "run_sql":
+                    if len([call for call in self.calls if call[0] == "run_sql"]) == 1:
+                        text = "ticker\n  BKNG"
+                    else:
+                        text = "No results."
+                else:
+                    text = "[]"
+                return SimpleNamespace(content=[SimpleNamespace(text=text)])
+
+        session = Session()
+        evidence = await _prefetch_stock_notes(session, "What have I written about Microsoft lately?")
+
+        self.assertIn("MSFT (sql_fallback): No results.", evidence)
+        self.assertEqual(session.calls[1][1]["ticker"], "MSFT")
+        self.assertNotIn("all active stock notes", evidence)
 
     async def test_broad_stock_question_prefetches_notes_without_content_classification(self):
         class Session:
