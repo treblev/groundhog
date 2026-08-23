@@ -1,7 +1,9 @@
+import json
 import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from langchain.agents.middleware import TodoListMiddleware, ToolCallLimitMiddleware, ToolRetryMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -12,13 +14,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from langgraph_client.client import (
     DatabaseGroundingMiddleware,
     InternalDetailsMiddleware,
+    _ask_routed,
     _canonical_note_tickers,
+    _fallback_system_prompt,
+    _fallback_tool_names,
     _make_middleware,
+    _make_tools,
+    _model_answer,
     _named_note_tickers,
     _prefetch_stock_notes,
     _resolve_search_domain,
+    _route_question,
     _system_prompt,
 )
+from langgraph_client.routing import RequestFeatures, RouteDecision, RouteId
 
 
 class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
@@ -154,6 +163,117 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(isinstance(item, TodoListMiddleware) for item in middleware))
         self.assertTrue(any(isinstance(item, DatabaseGroundingMiddleware) for item in middleware))
         self.assertTrue(any(isinstance(item, InternalDetailsMiddleware) for item in middleware))
+
+    def test_routed_middleware_excludes_todo_planner(self):
+        middleware = _make_middleware(include_todos=False)
+
+        self.assertFalse(any(isinstance(item, TodoListMiddleware) for item in middleware))
+
+    def test_fallback_context_is_compact_and_has_no_full_schema(self):
+        prompt = _fallback_system_prompt(RequestFeatures(domain="stock_note", operation="list"))
+
+        self.assertIn("stock_notes", prompt)
+        self.assertIn("DESCRIBE", prompt)
+        self.assertNotIn("Database schema:", prompt)
+        self.assertNotIn("stock_notes(id", prompt)
+
+    def test_fallback_tools_exclude_unrelated_domains(self):
+        class Session:
+            async def call_tool(self, name, arguments):
+                raise AssertionError("tool should not execute during construction")
+
+        names = {
+            tool.__name__
+            for tool in _make_tools(
+                Session(),
+                _fallback_tool_names(RequestFeatures(domain="stock_alert", operation="list")),
+            )
+        }
+
+        self.assertEqual(names, {"run_sql", "query_stock_alerts", "search_documents"})
+
+    async def test_runtime_symbols_feed_deterministic_route(self):
+        class Session:
+            def __init__(self):
+                self.calls = []
+
+            async def call_tool(self, name, arguments):
+                self.calls.append((name, arguments))
+                return SimpleNamespace(content=[SimpleNamespace(text=json.dumps({
+                    "rows": [{"ticker": "NEWIPO"}],
+                    "count": 1,
+                    "truncated": False,
+                    "next_cursor": None,
+                }))])
+
+        session = Session()
+        features, decision, reason = await _route_question(
+            session,
+            "What is the latest closing price for NEWIPO?",
+        )
+
+        self.assertEqual(features.tickers, ("NEWIPO",))
+        self.assertEqual(decision.route_id, RouteId.LATEST_PRICE)
+        self.assertIsNone(reason)
+        self.assertEqual(session.calls, [("get_stock_symbols", {})])
+
+    async def test_routed_model_prompt_contains_evidence_but_no_schema_or_tools(self):
+        class Model:
+            def __init__(self):
+                self.messages = None
+
+            async def ainvoke(self, messages, config):
+                self.messages = messages
+                return AIMessage(content="No matching notes were found.")
+
+        model = Model()
+        await _model_answer(
+            model,
+            callback=None,
+            question="What notes do I have for MSFT?",
+            evidence='{"rows":[],"count":0}',
+            instruction="Treat empty rows as authoritative.",
+        )
+        prompt = "\n".join(str(message.content) for message in model.messages)
+
+        self.assertIn('{"rows":[],"count":0}', prompt)
+        self.assertNotIn("Database schema:", prompt)
+        self.assertNotIn("run_sql", prompt)
+        self.assertNotIn("search_documents", prompt)
+
+    async def test_confident_route_executes_only_its_selected_mcp_tool(self):
+        class Session:
+            def __init__(self):
+                self.calls = []
+
+            async def call_tool(self, name, arguments):
+                self.calls.append((name, arguments))
+                return SimpleNamespace(content=[SimpleNamespace(text='{"rows":[],"count":0}')])
+
+        class Model:
+            async def ainvoke(self, messages, config):
+                return AIMessage(content="No matching notes were found.")
+
+        session = Session()
+        decision = RouteDecision(
+            route_id=RouteId.STOCK_NOTE_EXACT,
+            tool="query_stock_notes",
+            arguments={"tickers": ["MSFT"], "active_only": True},
+            answer_instruction="Treat empty rows as authoritative.",
+        )
+        with (
+            patch("langgraph_client.client.ChatOllama", return_value=Model()),
+            patch(
+                "langgraph_client.client._apply_routed_guards",
+                new=AsyncMock(side_effect=lambda _model, _callback, _question, _evidence, answer: answer),
+            ),
+        ):
+            answer = await _ask_routed(session, "What notes do I have for MSFT?", decision, None)
+
+        self.assertEqual(answer, "No matching notes were found.")
+        self.assertEqual(session.calls, [
+            ("query_stock_notes", {"tickers": ["MSFT"], "active_only": True})
+        ])
 
     def test_grounding_guard_includes_prefetched_note_evidence(self):
         guard = DatabaseGroundingMiddleware(prefetched_evidence="BKNG: bought 4 shares")

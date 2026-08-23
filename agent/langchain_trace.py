@@ -18,6 +18,35 @@ def _name(serialized: dict, metadata: dict | None = None) -> str:
     )
 
 
+def _response_metrics(response: Any) -> dict[str, int]:
+    """Promote Ollama prompt metrics from nested LangChain response metadata."""
+    payload = response.model_dump() if hasattr(response, "model_dump") else response
+    wanted = {
+        "prompt_eval_count": "prompt_eval_count",
+        "prompt_eval_duration": "prompt_eval_duration_ns",
+    }
+    found: dict[str, int] = {}
+
+    def visit(value: Any) -> None:
+        if len(found) == len(wanted):
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in wanted and wanted[key] not in found:
+                    try:
+                        found[wanted[key]] = int(item)
+                    except (TypeError, ValueError):
+                        pass
+                else:
+                    visit(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                visit(item)
+
+    visit(payload)
+    return found
+
+
 class GroundhogTraceCallback(AsyncCallbackHandler):
     """Record one completed JSONL span for each LangChain LLM or tool run."""
 
@@ -49,6 +78,7 @@ class GroundhogTraceCallback(AsyncCallbackHandler):
         call = self._llm.pop(run_id, None)
         trace = current_trace()
         if call is not None and trace is not None:
+            metrics = _response_metrics(response)
             trace.record_call(
                 "llm_call",
                 call["started_at"],
@@ -58,6 +88,8 @@ class GroundhogTraceCallback(AsyncCallbackHandler):
                 prompt=call["prompt"],
                 response=response,
                 error=None,
+                prompt_chars=len(str(call["prompt"])),
+                **metrics,
             )
 
     async def on_llm_error(self, error, *, run_id, parent_run_id=None, **kwargs):
@@ -73,6 +105,7 @@ class GroundhogTraceCallback(AsyncCallbackHandler):
                 prompt=call["prompt"],
                 response=None,
                 error=str(error),
+                prompt_chars=len(str(call["prompt"])),
             )
 
     async def on_tool_start(

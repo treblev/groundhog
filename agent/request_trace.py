@@ -109,6 +109,11 @@ class RequestTrace:
         self.trace_dir = trace_dir or TRACE_DIR
         self._monotonic_started = time.monotonic()
         self._ended = False
+        self._call_counts = {"llm_call": 0, "tool_call": 0}
+        self._tool_counts: dict[str, int] = {}
+        self._prompt_chars = 0
+        self._prompt_eval_count = 0
+        self._prompt_eval_duration_ns = 0
 
     def _write(self, event_type: str, started_at: datetime, **fields) -> None:
         _append_record(
@@ -145,6 +150,14 @@ class RequestTrace:
             raise ValueError(f"Unsupported call type: {call_type}")
         if status not in {"passed", "failed"}:
             raise ValueError(f"Unsupported call status: {status}")
+        self._call_counts[call_type] += 1
+        if call_type == "tool_call":
+            tool = str(fields.get("tool") or "unknown")
+            self._tool_counts[tool] = self._tool_counts.get(tool, 0) + 1
+        else:
+            self._prompt_chars += int(fields.get("prompt_chars") or 0)
+            self._prompt_eval_count += int(fields.get("prompt_eval_count") or 0)
+            self._prompt_eval_duration_ns += int(fields.get("prompt_eval_duration_ns") or 0)
         self._write(
             call_type,
             started_at,
@@ -153,12 +166,24 @@ class RequestTrace:
             **fields,
         )
 
+    def summary(self) -> dict:
+        """Return sanitized aggregate metrics for the current request."""
+        return {
+            "llm_calls": self._call_counts["llm_call"],
+            "tool_calls": self._call_counts["tool_call"],
+            "tools": dict(sorted(self._tool_counts.items())),
+            "prompt_chars": self._prompt_chars,
+            "prompt_eval_count": self._prompt_eval_count,
+            "prompt_eval_duration_ms": round(self._prompt_eval_duration_ns / 1_000_000, 3),
+        }
+
     def end(self, status: str, error: str | None = None, **metadata) -> None:
         if self._ended:
             return
         if status not in {"passed", "failed"}:
             raise ValueError(f"Unsupported request status: {status}")
         self._ended = True
+        metadata.setdefault("trace_summary", self.summary())
         self._write(
             "request_end",
             _utcnow(),

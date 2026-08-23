@@ -98,9 +98,11 @@ and a similarity score.
 
 Use this tool for requests by meaning, movements, equipment, format, similarity,
 or training focus, plus historical weekly Supertrend alerts and ticker notes by
-meaning or similarity. Use `get_workout_for_date` for a known date and `run_sql`
-for counts, aggregates, current stock prices, current signal state, and exact
-alert or note listings. The LangGraph system prompt enforces this distinction.
+meaning or similarity. Use `get_workout_for_date` for a known date,
+`query_stock_alerts` and `query_stock_notes` for exact filtered listings, and
+`run_sql` for unsupported counts, aggregates, or current signal-state questions.
+The deterministic `/ask` router enforces this distinction for confident routes;
+the general agent remains the fallback for ambiguous requests.
 Do not embed OHLCV bars or use semantic search for deterministic market calculations.
 
 ## Local LLM Boundary

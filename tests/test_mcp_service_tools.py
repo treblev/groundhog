@@ -52,6 +52,24 @@ class McpServiceToolTests(unittest.TestCase):
         self.con.execute("INSERT INTO workouts (id, date, day_of_week, name, category, structure_type, description) VALUES ('workout-1', '2026-07-24', 'THU', 'Intervals', 'running', 'intervals', 'Run intervals')")
         self.con.execute("INSERT INTO stock_watchlist (date, ticker, closing_price) VALUES ('2026-07-23', 'BTC-USD', 100000), ('2026-07-24', 'BTC-USD', 101000)")
         self.con.execute("INSERT INTO stock_signals (id, date, ticker, signal_type, timeframe, value, direction) VALUES ('signal-1', '2026-07-24', 'BTC-USD', 'supertrend', 'daily', 99000, 'bullish')")
+        self.con.execute(
+            """
+            INSERT INTO stock_notes (id, ticker, note, is_deleted, created_at, updated_at)
+            VALUES
+                ('note-1', 'BKNG', 'Bought 4 shares', FALSE, '2026-08-01', '2026-08-01'),
+                ('note-2', 'BKNG', 'Old deleted note', TRUE, '2026-07-01', '2026-07-02')
+            """
+        )
+        self.con.execute(
+            """
+            INSERT INTO stock_alerts (id, date, ticker, alert_type, message, notified_at)
+            VALUES
+                ('alert-goog', '2026-07-31', 'GOOG', 'supertrend_weekly_bearish', 'GOOG weekly bearish', '2026-07-31'),
+                ('alert-googl', '2026-07-31', 'GOOGL', 'supertrend_weekly_bearish', 'GOOGL weekly bearish', '2026-07-31'),
+                ('alert-bkng-old', '2026-07-01', 'BKNG', 'supertrend_weekly_bearish', 'BKNG weekly bearish', '2026-07-01'),
+                ('alert-bkng-new', '2026-08-07', 'BKNG', 'supertrend_weekly_bullish', 'BKNG weekly bullish', '2026-08-07')
+            """
+        )
 
     def tearDown(self):
         self.con.close()
@@ -158,6 +176,65 @@ class McpServiceToolTests(unittest.TestCase):
         self.assertEqual(result, matches)
         self.assertEqual(search.call_args.kwargs["domain"], "stock_note")
         self.assertEqual(search.call_args.kwargs["ticker"], "SHOP")
+
+    def test_stock_symbol_discovery_unions_runtime_sources(self):
+        result = json.loads(self._dispatch("get_stock_symbols", {}))
+
+        symbols = {row["ticker"] for row in result["rows"]}
+        self.assertTrue({"BTC-USD", "BKNG", "GOOG", "GOOGL", "TEST"}.issubset(symbols))
+        self.assertFalse(result["truncated"])
+
+    def test_query_stock_notes_returns_active_exact_rows_in_envelope(self):
+        result = json.loads(self._dispatch(
+            "query_stock_notes",
+            {"tickers": ["bkng"], "active_only": True},
+        ))
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["rows"][0]["id"], "note-1")
+        self.assertFalse(result["truncated"])
+        self.assertIsNone(result["next_cursor"])
+
+    def test_query_stock_notes_empty_result_is_structured(self):
+        result = json.loads(self._dispatch(
+            "query_stock_notes",
+            {"tickers": ["MSFT"], "active_only": True},
+        ))
+
+        self.assertEqual(result, {
+            "rows": [],
+            "count": 0,
+            "truncated": False,
+            "next_cursor": None,
+        })
+
+    def test_query_stock_alerts_applies_multi_ticker_weekly_filters(self):
+        result = json.loads(self._dispatch(
+            "query_stock_alerts",
+            {
+                "tickers": ["GOOG", "GOOGL"],
+                "timeframe": "weekly",
+                "direction": "bearish",
+            },
+        ))
+
+        self.assertEqual([row["ticker"] for row in result["rows"]], ["GOOG", "GOOGL"])
+
+    def test_query_stock_alerts_latest_per_ticker_and_pagination(self):
+        result = json.loads(self._dispatch(
+            "query_stock_alerts",
+            {
+                "tickers": ["BKNG", "GOOG"],
+                "timeframe": "weekly",
+                "latest_per_ticker": True,
+                "limit": 1,
+            },
+        ))
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["rows"][0]["id"], "alert-bkng-new")
+        self.assertTrue(result["truncated"])
+        self.assertEqual(result["next_cursor"], 1)
 
 
 if __name__ == "__main__":

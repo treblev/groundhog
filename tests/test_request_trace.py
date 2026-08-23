@@ -131,7 +131,16 @@ class RequestTraceTests(unittest.TestCase):
                 {"name": "ChatOllama"}, [["prompt"]], run_id=llm_id,
                 metadata={"ls_model_name": "qwen3.6:latest"},
             )
-            await callback.on_llm_end({"generations": [["answer"]]}, run_id=llm_id)
+            await callback.on_llm_end({
+                "generations": [[{
+                    "message": {
+                        "response_metadata": {
+                            "prompt_eval_count": 321,
+                            "prompt_eval_duration": 456000000,
+                        }
+                    }
+                }]],
+            }, run_id=llm_id)
             await callback.on_tool_start(
                 {"name": "run_sql"}, "query", run_id=tool_id,
                 inputs={"query": "SELECT 1"},
@@ -149,6 +158,12 @@ class RequestTraceTests(unittest.TestCase):
         self.assertEqual(records[1]["model"], "qwen3.6:latest")
         self.assertEqual(records[2]["tool"], "run_sql")
         self.assertEqual(records[2]["arguments"], {"query": "SELECT 1"})
+        self.assertEqual(records[1]["prompt_eval_count"], 321)
+        self.assertEqual(records[1]["prompt_eval_duration_ns"], 456000000)
+        self.assertEqual(records[-1]["metadata"]["trace_summary"]["llm_calls"], 1)
+        self.assertEqual(records[-1]["metadata"]["trace_summary"]["tool_calls"], 1)
+        self.assertEqual(records[-1]["metadata"]["trace_summary"]["prompt_eval_count"], 321)
+        self.assertEqual(records[-1]["metadata"]["trace_summary"]["prompt_eval_duration_ms"], 456.0)
 
 
 if __name__ == "__main__":

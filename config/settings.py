@@ -30,6 +30,14 @@ OLLAMA_CHAT_URL = f"{OLLAMA_BASE_URL}/api/chat"
 OLLAMA_EMBED_URL = f"{OLLAMA_BASE_URL}/api/embed"
 OLLAMA_EMBEDDINGS_URL = f"{OLLAMA_BASE_URL}/api/embeddings"
 
+ASK_BUSINESS_TIMEZONE = os.environ.get("GROUNDHOG_ASK_TIMEZONE", "America/Phoenix")
+ASK_ROUTING_ENABLED = os.environ.get("GROUNDHOG_ASK_ROUTING_ENABLED", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
 WATCHLIST_FILE = BASE_DIR / "config" / "watchlist.txt"
 
 def load_watchlist() -> list[tuple[str, str]]:

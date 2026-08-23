@@ -42,6 +42,48 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_stock_symbols",
+            description="Get canonical ticker symbols from the watchlist, signals, alerts, and stock notes.",
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
+        Tool(
+            name="query_stock_notes",
+            description="Query stock notes with exact structured filters. Use semantic search for meaning-based lookup.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tickers": {"type": "array", "items": {"type": "string"}},
+                    "start_date": {"type": "string", "description": "Inclusive YYYY-MM-DD created-date lower bound."},
+                    "end_date": {"type": "string", "description": "Inclusive YYYY-MM-DD created-date upper bound."},
+                    "active_only": {"type": "boolean", "default": True},
+                    "order": {"type": "string", "enum": ["asc", "desc"], "default": "desc"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 100},
+                    "cursor": {"type": "integer", "minimum": 0, "default": 0},
+                },
+                "required": [],
+            },
+        ),
+        Tool(
+            name="query_stock_alerts",
+            description="Query recorded stock alerts with exact ticker, date, timeframe, and direction filters.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tickers": {"type": "array", "items": {"type": "string"}},
+                    "start_date": {"type": "string", "description": "Inclusive YYYY-MM-DD lower bound."},
+                    "end_date": {"type": "string", "description": "Inclusive YYYY-MM-DD upper bound."},
+                    "timeframe": {"type": "string", "enum": ["daily", "weekly"]},
+                    "direction": {"type": "string", "enum": ["bullish", "bearish"]},
+                    "alert_type": {"type": "string"},
+                    "latest_per_ticker": {"type": "boolean", "default": False},
+                    "order": {"type": "string", "enum": ["asc", "desc"], "default": "desc"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 100},
+                    "cursor": {"type": "integer", "minimum": 0, "default": 0},
+                },
+                "required": [],
+            },
+        ),
+        Tool(
             name="get_recent_activities",
             description="Get the most recent workout activities.",
             inputSchema={
@@ -233,6 +275,102 @@ def _dispatch_with_connection(
         ).fetchone()
         return f"{ticker} closing price on {row[0]}: ${row[1]:,.2f}" if row else f"No data for '{ticker}'."
 
+    if name == "get_stock_symbols":
+        return _query_envelope(con, """
+            SELECT DISTINCT upper(ticker) AS ticker
+            FROM (
+                SELECT ticker FROM stock_watchlist
+                UNION ALL SELECT ticker FROM stock_signals
+                UNION ALL SELECT ticker FROM stock_alerts
+                UNION ALL SELECT ticker FROM stock_notes
+            ) symbols
+            WHERE ticker IS NOT NULL AND trim(ticker) <> ''
+            ORDER BY ticker
+        """, limit=1000, cursor=0)
+
+    if name == "query_stock_notes":
+        clauses, parameters = [], []
+        tickers = [str(item).strip().upper() for item in args.get("tickers", []) if str(item).strip()]
+        if tickers:
+            clauses.append(f"upper(ticker) IN ({', '.join('?' for _ in tickers)})")
+            parameters.extend(tickers)
+        if args.get("active_only", True):
+            clauses.append("NOT is_deleted")
+        if args.get("start_date"):
+            clauses.append("CAST(created_at AS DATE) >= ?")
+            parameters.append(args["start_date"])
+        if args.get("end_date"):
+            clauses.append("CAST(created_at AS DATE) <= ?")
+            parameters.append(args["end_date"])
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        order = _order(args)
+        limit, cursor = _page(args)
+        return _query_envelope(
+            con,
+            f"""
+            SELECT id, ticker, note, is_deleted, created_at, updated_at
+            FROM stock_notes
+            {where}
+            ORDER BY created_at {order}, id {order}
+            """,
+            parameters,
+            limit=limit,
+            cursor=cursor,
+        )
+
+    if name == "query_stock_alerts":
+        clauses, parameters = [], []
+        tickers = [str(item).strip().upper() for item in args.get("tickers", []) if str(item).strip()]
+        if tickers:
+            clauses.append(f"upper(ticker) IN ({', '.join('?' for _ in tickers)})")
+            parameters.extend(tickers)
+        if args.get("start_date"):
+            clauses.append("date >= ?")
+            parameters.append(args["start_date"])
+        if args.get("end_date"):
+            clauses.append("date <= ?")
+            parameters.append(args["end_date"])
+        if args.get("timeframe"):
+            clauses.append("alert_type LIKE ?")
+            parameters.append(f"supertrend_{args['timeframe']}_%")
+        if args.get("direction"):
+            clauses.append("alert_type LIKE ?")
+            parameters.append(f"%_{args['direction']}")
+        if args.get("alert_type"):
+            clauses.append("alert_type = ?")
+            parameters.append(args["alert_type"])
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        order = _order(args)
+        limit, cursor = _page(args)
+        if args.get("latest_per_ticker"):
+            query = f"""
+                SELECT id, date, ticker, alert_type, message, notified_at
+                FROM (
+                    SELECT id, date, ticker, alert_type, message, notified_at,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY ticker ORDER BY date DESC, notified_at DESC, id
+                           ) AS ticker_rank
+                    FROM stock_alerts
+                    {where}
+                ) ranked
+                WHERE ticker_rank = 1
+                ORDER BY date {order}, notified_at {order}, ticker
+            """
+        else:
+            query = f"""
+                SELECT id, date, ticker, alert_type, message, notified_at
+                FROM stock_alerts
+                {where}
+                ORDER BY date {order}, notified_at {order}, ticker
+            """
+        return _query_envelope(
+            con,
+            query,
+            parameters,
+            limit=limit,
+            cursor=cursor,
+        )
+
     if name == "get_recent_activities":
         df = con.execute(
             "SELECT date, activity_type, duration_seconds, avg_hr, max_hr, calories FROM activities ORDER BY date DESC LIMIT ?",
@@ -395,6 +533,34 @@ def _query_json(
     return json.dumps(rows, default=_json_default)
 
 
+def _query_envelope(
+    con: duckdb.DuckDBPyConnection,
+    query: str,
+    parameters: list | None = None,
+    *,
+    limit: int,
+    cursor: int,
+) -> str:
+    """Return stable structured rows with explicit truncation metadata."""
+    cursor_result = con.execute(
+        f"SELECT * FROM ({query}) routed_query LIMIT ? OFFSET ?",
+        [*(parameters or []), limit + 1, cursor],
+    )
+    columns = [column[0] for column in cursor_result.description]
+    fetched = cursor_result.fetchall()
+    truncated = len(fetched) > limit
+    rows = [dict(zip(columns, row)) for row in fetched[:limit]]
+    return json.dumps(
+        {
+            "rows": rows,
+            "count": len(rows),
+            "truncated": truncated,
+            "next_cursor": cursor + limit if truncated else None,
+        },
+        default=_json_default,
+    )
+
+
 def _json_default(value):
     if isinstance(value, Decimal):
         return float(value)
@@ -410,6 +576,23 @@ def _date_range(args: dict, column: str) -> tuple[str, list]:
         clauses.append(f"{column} <= ?")
         parameters.append(args["end_date"])
     return ("WHERE " + " AND ".join(clauses)) if clauses else "", parameters
+
+
+def _order(args: dict) -> str:
+    value = str(args.get("order", "desc")).lower()
+    if value not in {"asc", "desc"}:
+        raise ValueError("order must be 'asc' or 'desc'")
+    return value.upper()
+
+
+def _page(args: dict) -> tuple[int, int]:
+    limit = int(args.get("limit", 100))
+    cursor = int(args.get("cursor", 0))
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    if cursor < 0:
+        raise ValueError("cursor must be non-negative")
+    return limit, cursor
 
 
 async def main():
