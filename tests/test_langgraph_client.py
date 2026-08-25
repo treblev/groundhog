@@ -23,6 +23,7 @@ from langgraph_client.client import (
     _model_answer,
     _named_note_tickers,
     _prefetch_stock_notes,
+    _apply_routed_guards,
     _resolve_search_domain,
     _route_question,
     _system_prompt,
@@ -278,6 +279,75 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
     def test_grounding_guard_includes_prefetched_note_evidence(self):
         guard = DatabaseGroundingMiddleware(prefetched_evidence="BKNG: bought 4 shares")
         self.assertEqual(guard._tool_evidence([]), "BKNG: bought 4 shares")
+
+    async def test_routed_guards_use_one_combined_reviewer_on_success(self):
+        class Reviewer:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, messages, config=None):
+                self.calls += 1
+                prompt = str(messages[-1].content)
+                assert "grounded" in prompt
+                assert "safe" in prompt
+                return AIMessage(content=(
+                    '{"grounded": true, "safe": true, '
+                    '"grounding_reason": "Supported.", "safety_reason": "User-facing."}'
+                ))
+
+        reviewer = Reviewer()
+        answer = AIMessage(content="No matching record was found.")
+        with patch("langgraph_client.client.ChatOllama", return_value=reviewer):
+            result = await _apply_routed_guards(
+                model=None,
+                callback=None,
+                question="What notes do I have for MSFT?",
+                evidence='{"rows": [], "count": 0}',
+                answer=answer,
+            )
+
+        self.assertEqual(result.content, answer.content)
+        self.assertEqual(reviewer.calls, 1)
+
+    async def test_routed_guards_repair_then_recheck_with_combined_reviewer(self):
+        class Reviewer:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, messages, config=None):
+                self.calls += 1
+                verdict = (
+                    '{"grounded": false, "safe": true, '
+                    '"grounding_reason": "Unsupported claim.", "safety_reason": "User-facing."}'
+                    if self.calls == 1 else
+                    '{"grounded": true, "safe": true, '
+                    '"grounding_reason": "Supported.", "safety_reason": "User-facing."}'
+                )
+                return AIMessage(content=verdict)
+
+        class AnswerModel:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, messages, config=None):
+                self.calls += 1
+                return AIMessage(content="Corrected answer.")
+
+        reviewer = Reviewer()
+        answer_model = AnswerModel()
+        answer = AIMessage(content="Unsupported answer.")
+        with patch("langgraph_client.client.ChatOllama", return_value=reviewer):
+            result = await _apply_routed_guards(
+                model=answer_model,
+                callback=None,
+                question="What notes do I have for MSFT?",
+                evidence='{"rows": [], "count": 0}',
+                answer=answer,
+            )
+
+        self.assertEqual(result.content, "Corrected answer.")
+        self.assertEqual(reviewer.calls, 2)
+        self.assertEqual(answer_model.calls, 1)
 
     async def test_grounding_guard_requests_a_corrective_retry_without_tool_result(self):
         guard = DatabaseGroundingMiddleware()

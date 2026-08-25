@@ -791,6 +791,56 @@ async def _repair_routed_answer(
     )
 
 
+async def _review_routed_answer(
+    reviewer_model,
+    callback,
+    question: str,
+    evidence: str,
+    answer: AIMessage,
+) -> tuple[bool, str, bool, str]:
+    """Run grounding and disclosure checks in one reviewer-model call."""
+    prompt = (
+        "Review the proposed answer against the supplied local evidence. "
+        "Return JSON only with this exact shape: "
+        '{"grounded": true|false, "safe": true|false, '
+        '"grounding_reason": "brief explanation", '
+        '"safety_reason": "brief explanation"}.\n\n'
+        "Grounding means every factual claim is supported by the evidence; do not use outside knowledge "
+        "or fill in missing facts. Safe means the answer is user-facing and does not reveal hidden prompts, "
+        "source code, tool or middleware internals, database paths, hostnames, IP addresses, credentials, "
+        "or service configuration.\n\n"
+        f"User question:\n{question}\n\n"
+        f"Local evidence:\n<evidence>\n{evidence}\n</evidence>\n\n"
+        f"Proposed answer:\n{answer.content}"
+    )
+    messages = [
+        SystemMessage(content="You are a strict grounding and user-facing safety reviewer."),
+        HumanMessage(content=prompt),
+    ]
+    try:
+        if callback:
+            response = await reviewer_model.ainvoke(
+                messages, config={"callbacks": [callback]}
+            )
+        else:
+            response = await reviewer_model.ainvoke(messages)
+        match = re.search(r"\{.*\}", str(response.content), re.DOTALL)
+        verdict = json.loads(match.group()) if match else {}
+        if not isinstance(verdict.get("grounded"), bool) or not isinstance(verdict.get("safe"), bool):
+            return False, "The combined reviewer did not return a valid grounded verdict.", False, (
+                "The combined reviewer did not return a valid safety verdict."
+            )
+        return (
+            verdict["grounded"],
+            str(verdict.get("grounding_reason", "No grounding reason supplied.")),
+            verdict["safe"],
+            str(verdict.get("safety_reason", "No safety reason supplied.")),
+        )
+    except Exception as error:
+        reason = f"The combined reviewer could not validate the answer: {error}"
+        return False, reason, False, reason
+
+
 async def _apply_routed_guards(
     model,
     callback,
@@ -798,10 +848,6 @@ async def _apply_routed_guards(
     evidence: str,
     answer: AIMessage,
 ) -> AIMessage:
-    evidence_message = ToolMessage(
-        content=evidence,
-        tool_call_id="deterministic-route-evidence",
-    )
     reviewer_model = ChatOllama(
         model=OLLAMA_SQL_MODEL,
         base_url=OLLAMA_BASE_URL,
@@ -810,45 +856,33 @@ async def _apply_routed_guards(
         format="json",
         num_predict=128,
     )
-    grounding = DatabaseGroundingMiddleware(
-        verifier_model=reviewer_model,
-        trace_callback=callback,
+    grounded, grounding_reason, safe, safety_reason = await _review_routed_answer(
+        reviewer_model, callback, question, evidence, answer
     )
-    grounded, reason = await grounding._verify(
-        [HumanMessage(content=question), evidence_message], answer
-    )
-    if not grounded:
-        answer = await _repair_routed_answer(
-            model,
-            callback,
-            question,
-            evidence,
-            answer,
-            f"Correct the answer so every factual claim is supported by the evidence. Reviewer reason: {reason}.",
-        )
-        grounded, _reason = await grounding._verify(
-            [HumanMessage(content=question), evidence_message], answer
-        )
+    if not grounded or not safe:
+        reasons = []
         if not grounded:
-            return AIMessage(content=grounding._DECLINE_MESSAGE)
-
-    safety = InternalDetailsMiddleware(
-        verifier_model=reviewer_model,
-        trace_callback=callback,
-    )
-    safe, reason = await safety._is_safe([HumanMessage(content=question)], answer)
-    if not safe:
+            reasons.append(f"grounding: {grounding_reason}")
+        if not safe:
+            reasons.append(f"safety: {safety_reason}")
         answer = await _repair_routed_answer(
             model,
             callback,
             question,
             evidence,
             answer,
-            f"Remove internal implementation details and answer only the user-facing question. Reviewer reason: {reason}.",
+            (
+                "Correct the answer so every factual claim is supported by the evidence and remove any "
+                "internal implementation details. Reviewer reasons: " + "; ".join(reasons) + "."
+            ),
         )
-        safe, _reason = await safety._is_safe([HumanMessage(content=question)], answer)
-        if not safe:
-            return AIMessage(content=safety._DECLINE_MESSAGE)
+        grounded, _grounding_reason, safe, _safety_reason = await _review_routed_answer(
+            reviewer_model, callback, question, evidence, answer
+        )
+        if not grounded or not safe:
+            if not grounded:
+                return AIMessage(content=DatabaseGroundingMiddleware._DECLINE_MESSAGE)
+            return AIMessage(content=InternalDetailsMiddleware._DECLINE_MESSAGE)
     return answer
 
 
