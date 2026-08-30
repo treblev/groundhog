@@ -4,7 +4,7 @@ import json
 import signal
 import sys
 import traceback
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from threading import Event
@@ -360,7 +360,12 @@ def main(argv: list[str] | None = None) -> int:
     daemon_parser.add_argument("--poll-seconds", type=int, default=60)
     summary_parser = commands.add_parser("summarize", help="Generate a local derived summary.")
     summary_parser.add_argument("kind", choices=["daily", "weekly"])
-    summary_parser.add_argument("--date", required=True, type=date.fromisoformat)
+    summary_parser.add_argument("--date", type=date.fromisoformat)
+    summary_parser.add_argument(
+        "--notify",
+        action="store_true",
+        help="Queue the generated weekly review through the Groundhog outbox.",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "run":
@@ -375,18 +380,47 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "summarize":
+        if args.kind == "daily" and args.date is None:
+            parser.error("summarize daily requires --date YYYY-MM-DD")
+        if args.kind == "daily" and args.notify:
+            parser.error("--notify is supported only for weekly reviews")
+        review_date = args.date
+        if args.kind == "weekly" and review_date is None:
+            from agent.weekly_reviewer import latest_completed_week_end
+
+            review_date = latest_completed_week_end(datetime.now(PHOENIX).date())
         init_db(DB_PATH)
         con = duckdb.connect(str(DB_PATH))
         try:
             prioritize_pending_outbox(con)
             content = (
-                generate_daily_summary(con, args.date)
+                generate_daily_summary(con, review_date)
                 if args.kind == "daily"
-                else generate_weekly_review(con, args.date)
+                else generate_weekly_review(con, review_date)
             )
+            if args.kind == "weekly" and args.notify:
+                weekly_review_key = f"weekly_review_generated:{review_date.isoformat()}"
+                if record_event(
+                    con,
+                    event_type="weekly_review_generated",
+                    source="groundhog_service",
+                    subject_type="weekly_review",
+                    subject_id=review_date.isoformat(),
+                    payload={
+                        "message": content,
+                        "week_start": (review_date - timedelta(days=6)).isoformat(),
+                        "week_end": review_date.isoformat(),
+                    },
+                    dedupe_key=weekly_review_key,
+                ):
+                    enqueue_event(con, event_id_for(weekly_review_key))
+                prioritize_pending_outbox(con)
         finally:
             con.close()
-        print(content)
+        if args.kind == "weekly" and args.notify:
+            print(f"Weekly review queued for week ending {review_date}.")
+        else:
+            print(content)
         return 0
 
     if args.command == "query":

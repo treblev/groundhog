@@ -16,6 +16,8 @@ class RouteId(StrEnum):
     STOCK_ALERT_EXACT = "stock_alert_exact"
     WORKOUT_SEMANTIC = "workout_semantic"
     LATEST_PRICE = "latest_price"
+    WEEKLY_HEALTH_SUMMARY = "weekly_health_summary"
+    WEEKLY_MARKET_SUMMARY = "weekly_market_summary"
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,14 @@ _LATEST_PRICE_RE = re.compile(
     r"\b(?:(?:latest|current|closing|close)\s+(?:stock\s+)?price|price\s+(?:of|for))\b",
     re.IGNORECASE,
 )
+_WEEKLY_HEALTH_SUMMARY_RE = re.compile(
+    r"\b(?:weekly|week(?:ly)?\s+(?:ending|summary))\b.*\bhealth\b|\bhealth\b.*\bweekly\b",
+    re.IGNORECASE,
+)
+_WEEKLY_MARKET_SUMMARY_RE = re.compile(
+    r"\b(?:weekly|week(?:ly)?\s+(?:ending|summary))\b.*\bmarket\b|\bmarket\b.*\bweekly\b",
+    re.IGNORECASE,
+)
 
 
 def looks_like_stock_request(question: str) -> bool:
@@ -120,7 +130,7 @@ def extract_features(
     reference_date: date,
 ) -> RequestFeatures:
     """Extract only deterministic features; unsupported ambiguity remains explicit."""
-    del reference_date  # Reserved for defined relative-date windows added to the registry.
+    del reference_date  # The summary tools resolve an omitted week to the latest Saturday.
     lowered = question.lower()
     dates = _ISO_DATE_RE.findall(question)
     tickers = _ticker_matches(question, symbols, aliases)
@@ -139,6 +149,20 @@ def extract_features(
     start_date = dates[0] if dates else None
     end_date = dates[1] if len(dates) > 1 else start_date
     limit = _limit(question)
+
+    if _WEEKLY_HEALTH_SUMMARY_RE.search(question):
+        return RequestFeatures(
+            domain="weekly_health",
+            operation="summary",
+            end_date=dates[-1] if dates else None,
+        )
+
+    if _WEEKLY_MARKET_SUMMARY_RE.search(question):
+        return RequestFeatures(
+            domain="weekly_market",
+            operation="summary",
+            end_date=dates[-1] if dates else None,
+        )
 
     if _LATEST_PRICE_RE.search(question):
         return RequestFeatures(
@@ -249,7 +273,27 @@ def _workout_arguments(_features: RequestFeatures, question: str) -> dict:
     return {"query": question, "domain": "workout", "top_k": 5}
 
 
+def _weekly_summary_arguments(features: RequestFeatures, _question: str) -> dict:
+    return {"week_end": features.end_date} if features.end_date else {}
+
+
 ROUTE_REGISTRY: tuple[RouteSpec, ...] = (
+    RouteSpec(
+        RouteId.WEEKLY_HEALTH_SUMMARY,
+        "weekly_health",
+        "summary",
+        "get_weekly_health_summary",
+        _weekly_summary_arguments,
+        "Describe the Sunday-through-Saturday health, activity, and sleep results. Distinguish daily active minutes from recorded activity minutes.",
+    ),
+    RouteSpec(
+        RouteId.WEEKLY_MARKET_SUMMARY,
+        "weekly_market",
+        "summary",
+        "get_weekly_market_summary",
+        _weekly_summary_arguments,
+        "Describe Bitcoin's weekly price trend, its latest Supertrend state as of week end, and the important alert balance and flips.",
+    ),
     RouteSpec(
         RouteId.LATEST_PRICE,
         "stock_price",

@@ -127,6 +127,45 @@ class McpServiceToolTests(unittest.TestCase):
         self.assertEqual(summary["bitcoin"]["change_percent"], 1.0)
         self.assertEqual(summary["bitcoin_supertrend"][0]["direction"], "bullish")
 
+    def test_weekly_health_summary_uses_sunday_through_saturday(self):
+        self.con.execute(
+            """
+            INSERT INTO health_metrics (date, steps, avg_hr, active_minutes)
+            VALUES ('2026-07-20', 10000, 70, 45), ('2026-07-24', 12000, 74, 55)
+            """
+        )
+
+        summary = json.loads(self._dispatch(
+            "get_weekly_health_summary", {"week_end": "2026-07-25"}
+        ))
+
+        self.assertEqual(summary["week_start"], "2026-07-19")
+        self.assertEqual(summary["week_end"], "2026-07-25")
+        self.assertEqual(summary["health"]["total_active_minutes"], 100)
+        self.assertEqual(summary["health"]["average_daily_hr"], 72.0)
+        self.assertEqual(summary["activities"]["recorded_activity_minutes"], 30.0)
+        self.assertEqual(summary["activities"]["duration_weighted_activity_hr"], 140.0)
+        self.assertEqual(summary["sleep"]["average_hrv"], 60.0)
+
+    def test_weekly_market_summary_includes_btc_trend_and_alert_balance(self):
+        summary = json.loads(self._dispatch(
+            "get_weekly_market_summary", {"week_end": "2026-07-25"}
+        ))
+
+        self.assertEqual(summary["week_start"], "2026-07-19")
+        self.assertEqual(summary["bitcoin"]["trend"], "up")
+        self.assertEqual(summary["bitcoin"]["change_percent"], 1.0)
+        self.assertEqual(summary["bitcoin_supertrend"][0]["direction"], "bullish")
+        self.assertEqual(summary["alert_summary"]["total"], 1)
+        self.assertEqual(summary["alert_summary"]["bullish"], 1)
+        self.assertEqual(summary["alerts"][0]["ticker"], "TEST")
+
+    def test_weekly_summary_rejects_non_saturday_end_date(self):
+        with self.assertRaisesRegex(ValueError, "must be a Saturday"):
+            self._dispatch(
+                "get_weekly_health_summary", {"week_end": "2026-07-24"}
+            )
+
     def test_semantic_search_tool_returns_json_results(self):
         matches = [{"source_id": "workout-1", "name": "Intervals", "score": 0.91}]
         with patch.object(server, "search_documents", return_value=matches) as search:
