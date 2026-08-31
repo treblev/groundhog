@@ -53,14 +53,15 @@ It returns validation, timeout, empty-output, and process-failure messages as
 factual command errors. It never routes the review request through a cloud or
 OpenClaw conversational model.
 
-## Proposed OpenClaw schedule
+## OpenClaw schedule
 
-This repository does not create or modify a live scheduler. The proposed job is
-one Sunday review at 8:00 PM Phoenix time:
+The deployed job runs every Saturday at 6:00 PM Phoenix time. Because Saturday
+is still in progress when the job starts, the default date resolution selects
+the prior fully completed Sunday-through-Saturday week:
 
 ```text
 name: groundhog-weekly-review
-schedule: cron 0 20 * * 0
+schedule: cron 0 18 * * 6
 timezone: America/Phoenix
 command: venv/bin/python groundhog_service.py summarize weekly --notify
 delivery.mode: none
@@ -69,6 +70,5 @@ timeout: 12m
 
 The scheduled command resolves the latest completed Saturday automatically and
 queues one deduplicated outbox message. OpenClaw cron delivery stays disabled;
-the existing Groundhog outbox bridge owns Telegram delivery. The schedule
-deliberately leaves the Sunday review tied to the Saturday that has fully
-completed.
+the existing Groundhog outbox bridge owns Telegram delivery. A manual run may
+still pass an explicit Saturday when a different completed week is needed.
