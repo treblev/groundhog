@@ -1,7 +1,7 @@
 """Local-only LLM summaries over durable Groundhog facts."""
 import hashlib
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 import duckdb
 import httpx
@@ -91,25 +91,10 @@ def generate_daily_summary(con: duckdb.DuckDBPyConnection, summary_date: date) -
 
 
 def generate_weekly_review(con: duckdb.DuckDBPyConnection, week_end: date) -> str:
-    week_start = week_end - timedelta(days=6)
-    events = con.execute(
-        """
-        SELECT event_type, payload FROM events
-        WHERE CAST(occurred_at AS DATE) BETWEEN ? AND ? ORDER BY occurred_at
-        """,
-        [week_start, week_end],
-    ).fetchall()
-    activities = con.execute(
-        """
-        SELECT activity_type, COUNT(*) FROM activities
-        WHERE date BETWEEN ? AND ? GROUP BY activity_type ORDER BY activity_type
-        """,
-        [week_start, week_end],
-    ).fetchall()
-    facts = f"Events: {events}\nActivities: {activities}"
-    content = _ask_local_model(f"Write a concise weekly Groundhog review for {week_start} through {week_end}.\nFacts:\n{facts}")
-    _store_artifact(con, "weekly_review", week_start, week_end, content)
-    return content
+    """Compatibility wrapper for the structured weekly reviewer."""
+    from agent.weekly_reviewer import generate_weekly_review as _generate_weekly_review
+
+    return _generate_weekly_review(con, week_end)
 
 
 def prioritize_pending_outbox(con: duckdb.DuckDBPyConnection) -> int:

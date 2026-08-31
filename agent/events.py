@@ -15,6 +15,7 @@ EVENT_TYPES = {
     "workout_data_imported",
     "health_metric_changed",
     "upload_imported",
+    "weekly_review_generated",
 }
 
 

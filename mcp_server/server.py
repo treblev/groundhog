@@ -15,6 +15,7 @@ from mcp.types import TextContent, Tool
 from agent.memory import remember, recall
 from agent.outbox import set_outbox_status
 from agent.semantic_search import search_documents
+from agent.weekly_summaries import health_summary, market_summary
 from config.settings import DB_PATH
 
 server = Server("groundhog")
@@ -148,6 +149,40 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {"date": {"type": "string", "description": "Date in YYYY-MM-DD format."}},
                 "required": ["date"],
+            },
+        ),
+        Tool(
+            name="get_weekly_health_summary",
+            description=(
+                "Summarize health, recorded activities, and sleep for a Sunday-through-Saturday week. "
+                "Omit week_end for the most recent Saturday."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "week_end": {
+                        "type": "string",
+                        "description": "Optional Saturday in YYYY-MM-DD format.",
+                    }
+                },
+                "required": [],
+            },
+        ),
+        Tool(
+            name="get_weekly_market_summary",
+            description=(
+                "Summarize Bitcoin's weekly price trend and all stock alerts for a "
+                "Sunday-through-Saturday week. Omit week_end for the most recent Saturday."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "week_end": {
+                        "type": "string",
+                        "description": "Optional Saturday in YYYY-MM-DD format.",
+                    }
+                },
+                "required": [],
             },
         ),
         Tool(
@@ -458,6 +493,16 @@ def _dispatch_with_connection(
             f"Date: {row[0]}, Steps: {row[1]}, Avg HR: {row[2]}, Active minutes: {row[3]}"
             if row
             else f"No health data for {args['date']}."
+        )
+
+    if name == "get_weekly_health_summary":
+        return json.dumps(
+            health_summary(con, args.get("week_end")), default=_json_default
+        )
+
+    if name == "get_weekly_market_summary":
+        return json.dumps(
+            market_summary(con, args.get("week_end")), default=_json_default
         )
 
     if name == "remember":

@@ -18,6 +18,20 @@ def route(question: str):
 
 
 class RequestRoutingTests(unittest.TestCase):
+    def test_weekly_health_summary_uses_dedicated_tool(self):
+        match = route("Give me my weekly health summary for the week ending 2026-08-29.")
+
+        self.assertEqual(match.decision.route_id, RouteId.WEEKLY_HEALTH_SUMMARY)
+        self.assertEqual(match.decision.tool, "get_weekly_health_summary")
+        self.assertEqual(match.decision.arguments, {"week_end": "2026-08-29"})
+
+    def test_weekly_market_summary_defaults_to_latest_saturday(self):
+        match = route("Give me the weekly market summary.")
+
+        self.assertEqual(match.decision.route_id, RouteId.WEEKLY_MARKET_SUMMARY)
+        self.assertEqual(match.decision.tool, "get_weekly_market_summary")
+        self.assertEqual(match.decision.arguments, {})
+
     def test_exact_stock_note_routes_without_semantic_search(self):
         match = route("List every currently saved, non-deleted stock note for BTC-USD, including the note dates.")
 

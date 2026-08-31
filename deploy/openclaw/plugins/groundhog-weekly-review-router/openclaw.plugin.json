@@ -1,0 +1,19 @@
+{
+  "id": "groundhog-weekly-review-router",
+  "name": "Groundhog weekly review router",
+  "description": "Deterministically routes /weekly-review to the local Groundhog weekly-summary command.",
+  "activation": {
+    "onStartup": true,
+    "onConfigPaths": ["plugins.entries.groundhog-weekly-review-router"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "appDir": {"type": "string"},
+      "python": {"type": "string"},
+      "dbPath": {"type": "string"},
+      "timeoutMs": {"type": "number", "exclusiveMinimum": 0}
+    }
+  }
+}

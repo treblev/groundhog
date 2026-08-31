@@ -423,6 +423,18 @@ def _make_tools(session: ClientSession, allowed_names: set[str] | None = None) -
         result = await session.call_tool("get_health_summary", {"date": date})
         return result.content[0].text if result.content else "No result."
 
+    async def get_weekly_health_summary(week_end: str | None = None) -> str:
+        """Summarize health, activities, and sleep for a Sunday-through-Saturday week. week_end, when supplied, must be a Saturday in YYYY-MM-DD format."""
+        arguments = {"week_end": week_end} if week_end else {}
+        result = await session.call_tool("get_weekly_health_summary", arguments)
+        return result.content[0].text if result.content else "No result."
+
+    async def get_weekly_market_summary(week_end: str | None = None) -> str:
+        """Summarize Bitcoin's weekly trend and that week's market alerts. week_end, when supplied, must be a Saturday in YYYY-MM-DD format."""
+        arguments = {"week_end": week_end} if week_end else {}
+        result = await session.call_tool("get_weekly_market_summary", arguments)
+        return result.content[0].text if result.content else "No result."
+
     async def remember(fact: str) -> str:
         """Save a fact or preference to persistent memory for future recall."""
         result = await session.call_tool("remember", {"fact": fact})
@@ -436,7 +448,8 @@ def _make_tools(session: ClientSession, allowed_names: set[str] | None = None) -
     tools = [run_sql, get_latest_price, query_stock_notes, query_stock_alerts,
              get_recent_activities, get_activity_summary, get_sleep_summary,
              get_workout_for_date, search_documents, get_data_freshness, get_market_summary,
-             get_health_summary, remember, recall]
+             get_health_summary, get_weekly_health_summary, get_weekly_market_summary,
+             remember, recall]
     if allowed_names is None:
         return tools
     return [tool for tool in tools if tool.__name__ in allowed_names]
@@ -676,6 +689,8 @@ _LEGACY_TOOL_NAMES = {
     "get_data_freshness",
     "get_market_summary",
     "get_health_summary",
+    "get_weekly_health_summary",
+    "get_weekly_market_summary",
     "remember",
     "recall",
 }
@@ -705,6 +720,8 @@ def _fallback_tool_names(features: RequestFeatures) -> set[str]:
         "stock_alert": {"run_sql", "query_stock_alerts", "search_documents"},
         "stock_price": {"run_sql", "get_latest_price", "get_market_summary"},
         "workout": {"run_sql", "get_workout_for_date", "search_documents"},
+        "weekly_health": {"get_weekly_health_summary"},
+        "weekly_market": {"get_weekly_market_summary"},
     }
     if features.domain in by_domain:
         return by_domain[features.domain]
@@ -721,6 +738,8 @@ def _fallback_tool_names(features: RequestFeatures) -> set[str]:
         "get_data_freshness",
         "get_market_summary",
         "get_health_summary",
+        "get_weekly_health_summary",
+        "get_weekly_market_summary",
         "remember",
         "recall",
     }
