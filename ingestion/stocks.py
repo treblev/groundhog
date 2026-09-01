@@ -12,6 +12,9 @@ import yfinance as yf
 from config.settings import DB_PATH, load_watchlist
 
 
+BTC_TICKER = "BTC-USD"
+
+
 def _fetch_history(ticker: str, period: str, start_date: date | None = None):
     if start_date is None:
         data = yf.Ticker(ticker).history(period=period)
@@ -108,6 +111,17 @@ def _bulk_insert(con: duckdb.DuckDBPyConnection, rows: list) -> int:
     return after - before
 
 
+def _bulk_upsert(con: duckdb.DuckDBPyConnection, rows: list) -> int:
+    if not rows:
+        return 0
+    ticker = rows[0][1]
+    before = con.execute("SELECT COUNT(*) FROM stock_watchlist WHERE ticker = ?", [ticker]).fetchone()[0]
+    for row in rows:
+        upsert_current_price(con, row)
+    after = con.execute("SELECT COUNT(*) FROM stock_watchlist WHERE ticker = ?", [ticker]).fetchone()[0]
+    return after - before
+
+
 def upsert_current_price(con: duckdb.DuckDBPyConnection, row: tuple) -> None:
     """Store one current-day market snapshot, refreshing it on repeated runs."""
     con.execute(
@@ -130,6 +144,7 @@ def run(tickers: set[str] | None = None) -> dict:
     stats = {
         "watchlist_count": 0,
         "fetched_tickers": [],
+        "fallback_tickers": [],
         "skipped_current": [],
         "no_data": [],
         "errors": [],
@@ -147,7 +162,10 @@ def run(tickers: set[str] | None = None) -> dict:
         for ticker, period in watchlist:
             try:
                 latest_date = _latest_date(con, ticker)
-                start_date = latest_date + timedelta(days=1) if latest_date else None
+                if latest_date and ticker == BTC_TICKER:
+                    start_date = latest_date
+                else:
+                    start_date = latest_date + timedelta(days=1) if latest_date else None
                 if start_date and start_date > date.today():
                     print(f"Skipping {ticker}: already current through {latest_date}.")
                     stats["skipped_current"].append(ticker)
@@ -159,11 +177,26 @@ def run(tickers: set[str] | None = None) -> dict:
                     print(f"Fetching {ticker} ({period})...")
 
                 rows = _fetch_history(ticker, period, start_date)
+                has_current_bitcoin_candle = any(
+                    row[0] == date.today() for row in rows
+                )
+                if ticker == BTC_TICKER and not has_current_bitcoin_candle:
+                    print("  Current daily candle missing; trying an intraday snapshot.")
+                    quote = fetch_latest_intraday_price(ticker)
+                    if quote is not None and (
+                        start_date is None or quote[0] >= start_date
+                    ):
+                        rows = [row for row in rows if row[0] != quote[0]]
+                        rows.append(quote)
+                        stats["fallback_tickers"].append(ticker)
                 if not rows:
                     print(f"  No data returned, skipping.")
                     stats["no_data"].append(ticker)
                     continue
-                inserted = _bulk_insert(con, rows)
+                if ticker == BTC_TICKER:
+                    inserted = _bulk_upsert(con, rows)
+                else:
+                    inserted = _bulk_insert(con, rows)
                 print(f"  {len(rows)} rows fetched, {inserted} inserted.")
                 stats["fetched_tickers"].append(ticker)
                 stats["rows_inserted"] += inserted

@@ -128,6 +128,30 @@ class StockIngestionTests(unittest.TestCase):
         finally:
             con.close()
 
+    def test_bulk_upsert_replaces_a_bitcoin_snapshot(self):
+        con = duckdb.connect(":memory:")
+        try:
+            _stock_table(con)
+            snapshot = (date(2026, 7, 20), "BTC-USD", 100, 101, 99, 100, 1)
+            daily_candle = (date(2026, 7, 20), "BTC-USD", 98, 103, 97, 102, 2)
+
+            self.assertEqual(stocks._bulk_upsert(con, [snapshot]), 1)
+            self.assertEqual(stocks._bulk_upsert(con, [daily_candle]), 0)
+            self.assertEqual(
+                con.execute(
+                    "SELECT open, high, low, closing_price, volume FROM stock_watchlist"
+                ).fetchone(),
+                (
+                    Decimal("98.00"),
+                    Decimal("103.00"),
+                    Decimal("97.00"),
+                    Decimal("102.00"),
+                    2,
+                ),
+            )
+        finally:
+            con.close()
+
     def test_run_fetches_starting_day_after_latest_stored_date(self):
         con = duckdb.connect(":memory:")
         _stock_table(con)
@@ -158,11 +182,78 @@ class StockIngestionTests(unittest.TestCase):
             patch.object(stocks, "load_watchlist", return_value=[("AAPL", "2y"), ("BTC-USD", "max")]),
             patch.object(stocks.duckdb, "connect", return_value=con),
             patch.object(stocks, "_fetch_history", return_value=[]) as fetch,
+            patch.object(stocks, "fetch_latest_intraday_price", return_value=None) as fallback,
             patch("builtins.print"),
         ):
             stocks.run(tickers={"BTC-USD"})
 
         fetch.assert_called_once_with("BTC-USD", "max", None)
+        fallback.assert_called_once_with("BTC-USD")
+
+    def test_run_uses_intraday_fallback_when_bitcoin_daily_history_is_empty(self):
+        con = duckdb.connect(":memory:")
+        _stock_table(con)
+        quote = (FrozenDate.today(), "BTC-USD", 100, 103, 99, 102, 2)
+        with (
+            patch.object(stocks, "date", FrozenDate),
+            patch.object(stocks, "load_watchlist", return_value=[("BTC-USD", "max")]),
+            patch.object(stocks.duckdb, "connect", return_value=con),
+            patch.object(stocks, "_fetch_history", return_value=[]),
+            patch.object(stocks, "fetch_latest_intraday_price", return_value=quote),
+            patch("builtins.print"),
+        ):
+            stats = stocks.run()
+
+        self.assertEqual(stats["fallback_tickers"], ["BTC-USD"])
+        self.assertEqual(stats["fetched_tickers"], ["BTC-USD"])
+        self.assertEqual(stats["no_data"], [])
+        self.assertEqual(stats["rows_inserted"], 1)
+
+    def test_run_overlaps_latest_bitcoin_date_and_skips_fallback_when_current_exists(self):
+        con = duckdb.connect(":memory:")
+        _stock_table(con)
+        con.execute(
+            """
+            INSERT INTO stock_watchlist
+                (date, ticker, open, high, low, closing_price, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [date(2026, 7, 20), "BTC-USD", 100, 101, 99, 100, 1],
+        )
+        rows = [
+            (date(2026, 7, 20), "BTC-USD", 98, 103, 97, 102, 2),
+            (FrozenDate.today(), "BTC-USD", 102, 104, 101, 103, 3),
+        ]
+        with (
+            patch.object(stocks, "date", FrozenDate),
+            patch.object(stocks, "load_watchlist", return_value=[("BTC-USD", "max")]),
+            patch.object(stocks.duckdb, "connect", return_value=con),
+            patch.object(stocks, "_fetch_history", return_value=rows) as fetch,
+            patch.object(stocks, "fetch_latest_intraday_price") as fallback,
+            patch("builtins.print"),
+        ):
+            stats = stocks.run()
+
+        fetch.assert_called_once_with("BTC-USD", "max", date(2026, 7, 20))
+        fallback.assert_not_called()
+        self.assertEqual(stats["fallback_tickers"], [])
+        self.assertEqual(stats["rows_inserted"], 1)
+
+    def test_run_does_not_use_intraday_fallback_for_an_equity(self):
+        con = duckdb.connect(":memory:")
+        _stock_table(con)
+        with (
+            patch.object(stocks, "load_watchlist", return_value=[("EA", "2y")]),
+            patch.object(stocks.duckdb, "connect", return_value=con),
+            patch.object(stocks, "_fetch_history", return_value=[]),
+            patch.object(stocks, "fetch_latest_intraday_price") as fallback,
+            patch("builtins.print"),
+        ):
+            stats = stocks.run()
+
+        fallback.assert_not_called()
+        self.assertEqual(stats["fallback_tickers"], [])
+        self.assertEqual(stats["no_data"], ["EA"])
 
     def test_empty_yahoo_response_returns_no_rows(self):
         with patch.object(stocks.yf, "Ticker") as ticker_class:

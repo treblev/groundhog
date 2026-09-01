@@ -104,6 +104,7 @@ class RunTrackingTests(unittest.TestCase):
     def test_daily_pipeline_queues_completion_summary(self):
         stats = {
             "rows_inserted": 3,
+            "fallback_tickers": ["BTC-USD"],
             "no_data": ["EA"],
             "errors": [],
         }
@@ -133,6 +134,8 @@ class RunTrackingTests(unittest.TestCase):
         self.assertEqual(pending, "pending")
         self.assertEqual(result["new_alert_count"], 0)
         self.assertIn("EA", result["message"])
+        self.assertEqual(result["fallback_tickers"], ["BTC-USD"])
+        self.assertIn("Intraday fallback used: BTC-USD", result["message"])
 
     def test_weekend_crypto_job_fetches_only_bitcoin(self):
         with (

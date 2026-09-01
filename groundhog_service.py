@@ -179,6 +179,7 @@ def run_daily_stocks() -> None:
         new_alert_count = alert_count_after - alert_count_before
         no_data = stock_stats.get("no_data", [])
         errors = stock_stats.get("errors", [])
+        fallback_tickers = stock_stats.get("fallback_tickers", [])
         issues = [*no_data, *(item["ticker"] for item in errors if "ticker" in item)]
         message = (
             f"Daily stocks completed: {new_alert_count} new alert(s); "
@@ -187,6 +188,8 @@ def run_daily_stocks() -> None:
         )
         if issues:
             message += f" Data issues: {', '.join(issues)}."
+        if fallback_tickers:
+            message += f" Intraday fallback used: {', '.join(fallback_tickers)}."
         _finish_run(
             run_id,
             DAILY_STOCKS_JOB,
@@ -198,6 +201,7 @@ def run_daily_stocks() -> None:
                 "new_alert_count": new_alert_count,
                 "latest_price_date": latest_price_date,
                 "rows_inserted": stock_stats.get("rows_inserted", 0),
+                "fallback_tickers": fallback_tickers,
                 "no_data": no_data,
                 "errors": errors,
             },
