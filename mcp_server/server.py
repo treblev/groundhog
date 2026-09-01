@@ -17,6 +17,50 @@ from agent.outbox import set_outbox_status
 from agent.semantic_search import search_documents
 from agent.weekly_summaries import health_summary, market_summary
 from config.settings import DB_PATH
+from mcp_server.tool_docs import ToolDocumentationError, load_tool_documentation
+
+
+_TOOL_NAMES = frozenset(
+    {
+        "run_sql",
+        "get_latest_price",
+        "get_stock_symbols",
+        "query_stock_notes",
+        "query_stock_alerts",
+        "get_recent_activities",
+        "get_activity_summary",
+        "get_sleep_summary",
+        "get_workout_for_date",
+        "search_documents",
+        "get_data_freshness",
+        "get_market_summary",
+        "get_health_summary",
+        "get_weekly_health_summary",
+        "get_weekly_market_summary",
+        "remember",
+        "recall",
+        "get_recent_events",
+        "get_pending_outbox",
+        "get_agent_run_status",
+        "get_latest_alerts",
+        "mark_outbox_delivered",
+    }
+)
+_TOOL_DOCUMENTATION = load_tool_documentation(expected_tool_names=_TOOL_NAMES)
+
+
+def _description(tool_name: str) -> str:
+    return _TOOL_DOCUMENTATION[tool_name].description
+
+
+def _argument_description(tool_name: str, argument_name: str) -> str:
+    try:
+        return _TOOL_DOCUMENTATION[tool_name].arguments[argument_name]
+    except KeyError as error:
+        raise ToolDocumentationError(
+            f"Missing documentation for argument '{tool_name}.{argument_name}'"
+        ) from error
+
 
 server = Server("groundhog")
 
@@ -26,36 +70,36 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="run_sql",
-            description="Run a DuckDB SQL query and return the results.",
+            description=_description("run_sql"),
             inputSchema={
                 "type": "object",
-                "properties": {"query": {"type": "string", "description": "A valid DuckDB SQL query."}},
+                "properties": {"query": {"type": "string", "description": _argument_description("run_sql", "query")}},
                 "required": ["query"],
             },
         ),
         Tool(
             name="get_latest_price",
-            description="Get the latest closing price for a stock ticker.",
+            description=_description("get_latest_price"),
             inputSchema={
                 "type": "object",
-                "properties": {"ticker": {"type": "string", "description": "Exact ticker symbol e.g. INTC, BTC-USD."}},
+                "properties": {"ticker": {"type": "string", "description": _argument_description("get_latest_price", "ticker")}},
                 "required": ["ticker"],
             },
         ),
         Tool(
             name="get_stock_symbols",
-            description="Get canonical ticker symbols from the watchlist, signals, alerts, and stock notes.",
+            description=_description("get_stock_symbols"),
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         Tool(
             name="query_stock_notes",
-            description="Query stock notes with exact structured filters. Use semantic search for meaning-based lookup.",
+            description=_description("query_stock_notes"),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "tickers": {"type": "array", "items": {"type": "string"}},
-                    "start_date": {"type": "string", "description": "Inclusive YYYY-MM-DD created-date lower bound."},
-                    "end_date": {"type": "string", "description": "Inclusive YYYY-MM-DD created-date upper bound."},
+                    "start_date": {"type": "string", "description": _argument_description("query_stock_notes", "start_date")},
+                    "end_date": {"type": "string", "description": _argument_description("query_stock_notes", "end_date")},
                     "active_only": {"type": "boolean", "default": True},
                     "order": {"type": "string", "enum": ["asc", "desc"], "default": "desc"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 100},
@@ -66,13 +110,13 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="query_stock_alerts",
-            description="Query recorded stock alerts with exact ticker, date, timeframe, and direction filters.",
+            description=_description("query_stock_alerts"),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "tickers": {"type": "array", "items": {"type": "string"}},
-                    "start_date": {"type": "string", "description": "Inclusive YYYY-MM-DD lower bound."},
-                    "end_date": {"type": "string", "description": "Inclusive YYYY-MM-DD upper bound."},
+                    "start_date": {"type": "string", "description": _argument_description("query_stock_alerts", "start_date")},
+                    "end_date": {"type": "string", "description": _argument_description("query_stock_alerts", "end_date")},
                     "timeframe": {"type": "string", "enum": ["daily", "weekly"]},
                     "direction": {"type": "string", "enum": ["bullish", "bearish"]},
                     "alert_type": {"type": "string"},
@@ -86,83 +130,75 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_recent_activities",
-            description="Get the most recent workout activities.",
+            description=_description("get_recent_activities"),
             inputSchema={
                 "type": "object",
-                "properties": {"limit": {"type": "integer", "description": "Number of activities to return. Default 5."}},
+                "properties": {"limit": {"type": "integer", "description": _argument_description("get_recent_activities", "limit")}},
                 "required": [],
             },
         ),
         Tool(
             name="get_activity_summary",
-            description="Summarize activities for an optional inclusive YYYY-MM-DD date range.",
+            description=_description("get_activity_summary"),
             inputSchema={"type": "object", "properties": {"start_date": {"type": "string"}, "end_date": {"type": "string"}}, "required": []},
         ),
         Tool(
             name="get_sleep_summary",
-            description="Summarize sleep metrics for an optional inclusive YYYY-MM-DD date range.",
+            description=_description("get_sleep_summary"),
             inputSchema={"type": "object", "properties": {"start_date": {"type": "string"}, "end_date": {"type": "string"}}, "required": []},
         ),
         Tool(
             name="get_workout_for_date",
-            description="Get the planned workout for a YYYY-MM-DD date.",
+            description=_description("get_workout_for_date"),
             inputSchema={"type": "object", "properties": {"date": {"type": "string"}}, "required": ["date"]},
         ),
         Tool(
             name="search_documents",
-            description=(
-                "Search stored workout plans, historical weekly Supertrend alerts, or user-authored ticker notes by meaning or "
-                "similarity. Use domain='workout' for non-date workout lookup and domain='stock_alert' "
-                "for historical weekly flips; use domain='stock_note' for semantic note retrieval. "
-                "Use structured tools for exact dates, counts, and market facts."
-            ),
+            description=_description("search_documents"),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Natural-language semantic search query."},
+                    "query": {"type": "string", "description": _argument_description("search_documents", "query")},
                     "domain": {"type": "string", "enum": ["workout", "stock_alert", "stock_note"], "default": "workout"},
                     "top_k": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
-                    "start_date": {"type": "string", "description": "Optional inclusive YYYY-MM-DD lower bound."},
-                    "end_date": {"type": "string", "description": "Optional inclusive YYYY-MM-DD upper bound."},
-                    "section": {"type": "string", "description": "Optional track filter, such as Fitness, HYROX, Tread, Row, or Floor."},
-                    "structure_type": {"type": "string", "description": "Optional exact workout structure filter."},
-                    "ticker": {"type": "string", "description": "Optional exact ticker filter for stock-alert retrieval."},
-                    "direction": {"type": "string", "enum": ["bullish", "bearish"], "description": "Optional weekly Supertrend direction filter."},
+                    "start_date": {"type": "string", "description": _argument_description("search_documents", "start_date")},
+                    "end_date": {"type": "string", "description": _argument_description("search_documents", "end_date")},
+                    "section": {"type": "string", "description": _argument_description("search_documents", "section")},
+                    "structure_type": {"type": "string", "description": _argument_description("search_documents", "structure_type")},
+                    "ticker": {"type": "string", "description": _argument_description("search_documents", "ticker")},
+                    "direction": {"type": "string", "enum": ["bullish", "bearish"], "description": _argument_description("search_documents", "direction")},
                 },
                 "required": ["query"],
             },
         ),
         Tool(
             name="get_data_freshness",
-            description="Get the latest available date for every Groundhog data source.",
+            description=_description("get_data_freshness"),
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         Tool(
             name="get_market_summary",
-            description="Summarize the latest tracked market data, including BTC-USD price, change, and signals.",
+            description=_description("get_market_summary"),
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         Tool(
             name="get_health_summary",
-            description="Get the health metrics (steps, avg HR, active minutes) for a specific date.",
+            description=_description("get_health_summary"),
             inputSchema={
                 "type": "object",
-                "properties": {"date": {"type": "string", "description": "Date in YYYY-MM-DD format."}},
+                "properties": {"date": {"type": "string", "description": _argument_description("get_health_summary", "date")}},
                 "required": ["date"],
             },
         ),
         Tool(
             name="get_weekly_health_summary",
-            description=(
-                "Summarize health, recorded activities, and sleep for a Sunday-through-Saturday week. "
-                "Omit week_end for the most recent Saturday."
-            ),
+            description=_description("get_weekly_health_summary"),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "week_end": {
                         "type": "string",
-                        "description": "Optional Saturday in YYYY-MM-DD format.",
+                        "description": _argument_description("get_weekly_health_summary", "week_end"),
                     }
                 },
                 "required": [],
@@ -170,16 +206,13 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_weekly_market_summary",
-            description=(
-                "Summarize Bitcoin's weekly price trend and all stock alerts for a "
-                "Sunday-through-Saturday week. Omit week_end for the most recent Saturday."
-            ),
+            description=_description("get_weekly_market_summary"),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "week_end": {
                         "type": "string",
-                        "description": "Optional Saturday in YYYY-MM-DD format.",
+                        "description": _argument_description("get_weekly_market_summary", "week_end"),
                     }
                 },
                 "required": [],
@@ -187,63 +220,63 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="remember",
-            description="Save a fact or preference to persistent memory for future recall.",
+            description=_description("remember"),
             inputSchema={
                 "type": "object",
-                "properties": {"fact": {"type": "string", "description": "The fact or preference to remember."}},
+                "properties": {"fact": {"type": "string", "description": _argument_description("remember", "fact")}},
                 "required": ["fact"],
             },
         ),
         Tool(
             name="recall",
-            description="Search persistent memory for the user's personal opinions, preferences, and stated beliefs. Do NOT use for factual data questions.",
+            description=_description("recall"),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "The topic or question to search memory for."},
-                    "top_k": {"type": "integer", "description": "Number of memories to return. Default 3."},
+                    "query": {"type": "string", "description": _argument_description("recall", "query")},
+                    "top_k": {"type": "integer", "description": _argument_description("recall", "top_k")},
                 },
                 "required": ["query"],
             },
         ),
         Tool(
             name="get_recent_events",
-            description="Get recent durable Groundhog service events.",
+            description=_description("get_recent_events"),
             inputSchema={
                 "type": "object",
-                "properties": {"limit": {"type": "integer", "description": "Number of events to return. Default 20."}},
+                "properties": {"limit": {"type": "integer", "description": _argument_description("get_recent_events", "limit")}},
                 "required": [],
             },
         ),
         Tool(
             name="get_pending_outbox",
-            description="Get pending Groundhog delivery items with their source event data.",
+            description=_description("get_pending_outbox"),
             inputSchema={
                 "type": "object",
-                "properties": {"limit": {"type": "integer", "description": "Number of items to return. Default 20."}},
+                "properties": {"limit": {"type": "integer", "description": _argument_description("get_pending_outbox", "limit")}},
                 "required": [],
             },
         ),
         Tool(
             name="get_agent_run_status",
-            description="Get the most recent Groundhog scheduled job run and its outcome.",
+            description=_description("get_agent_run_status"),
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         Tool(
             name="get_latest_alerts",
-            description="Get recent deduplicated stock alerts recorded by Groundhog.",
+            description=_description("get_latest_alerts"),
             inputSchema={
                 "type": "object",
-                "properties": {"limit": {"type": "integer", "description": "Number of alerts to return. Default 10."}},
+                "properties": {"limit": {"type": "integer", "description": _argument_description("get_latest_alerts", "limit")}},
                 "required": [],
             },
         ),
         Tool(
             name="mark_outbox_delivered",
-            description="Mark one pending Groundhog outbox item as delivered after OpenClaw sends it.",
+            description=_description("mark_outbox_delivered"),
             inputSchema={
                 "type": "object",
-                "properties": {"outbox_id": {"type": "string", "description": "The outbox item ID to mark delivered."}},
+                "properties": {"outbox_id": {"type": "string", "description": _argument_description("mark_outbox_delivered", "outbox_id")}},
                 "required": ["outbox_id"],
             },
         ),
