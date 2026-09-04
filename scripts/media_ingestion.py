@@ -38,10 +38,37 @@ DEFAULT_LEASE_SECONDS = 20 * 60
 HEARTBEAT_SECONDS = 60
 PROCESSED_IMAGE_RETENTION_DAYS = 15
 CLEANUP_INTERVAL_SECONDS = 6 * 60 * 60
+DB_LOCK_RETRY_ATTEMPTS = 20
+DB_LOCK_RETRY_DELAY_SECONDS = 0.1
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _is_transient_db_lock(error: Exception) -> bool:
+    if not isinstance(error, duckdb.Error):
+        return False
+    text = str(error).lower()
+    return any(token in text for token in ("lock", "conflict", "temporar", "busy"))
+
+
+def _connect_db(
+    db_path: Path,
+    *,
+    read_only: bool = False,
+    attempts: int = DB_LOCK_RETRY_ATTEMPTS,
+    delay_seconds: float = DB_LOCK_RETRY_DELAY_SECONDS,
+) -> duckdb.DuckDBPyConnection:
+    """Wait through brief cross-process DuckDB writer collisions."""
+    for attempt in range(attempts):
+        try:
+            return duckdb.connect(str(db_path), read_only=read_only)
+        except duckdb.Error as error:
+            if not _is_transient_db_lock(error) or attempt == attempts - 1:
+                raise
+            time.sleep(delay_seconds)
+    raise RuntimeError("DuckDB connection retry loop ended unexpectedly.")
 
 
 def _default_spool_dir() -> Path:
@@ -118,7 +145,7 @@ def enqueue_media(
         trace.end("failed", str(error), phase="enqueue")
         raise
 
-    con = duckdb.connect(str(db_path))
+    con = _connect_db(db_path)
     trace = None
     try:
         existing = con.execute(
@@ -210,7 +237,7 @@ def claim_next_job(
     worker_id = worker_id or f"{socket.gethostname()}:{os.getpid()}"
     now = _utcnow()
     lease_expires_at = now + timedelta(seconds=lease_seconds)
-    con = duckdb.connect(str(db_path))
+    con = _connect_db(db_path)
     try:
         con.execute("BEGIN TRANSACTION")
         con.execute(
@@ -287,7 +314,7 @@ class LeaseHeartbeat:
         while not self._stop.wait(self.interval_seconds):
             now = _utcnow()
             try:
-                con = duckdb.connect(str(self.db_path))
+                con = _connect_db(self.db_path)
                 try:
                     con.execute(
                         """
@@ -439,9 +466,8 @@ def _retryable_error(error: Exception) -> bool:
         return True
     if isinstance(error, httpx.HTTPStatusError):
         return error.response.status_code in {408, 429, 502, 503, 504}
-    if isinstance(error, duckdb.Error):
-        text = str(error).lower()
-        return any(token in text for token in ("lock", "conflict", "temporar", "busy"))
+    if _is_transient_db_lock(error):
+        return True
     return False
 
 
@@ -468,7 +494,7 @@ def _record_terminal_event(
 def _finish_success(db_path: Path, job: dict, result: list[dict] | dict) -> None:
     now = _utcnow()
     message = _success_message(job, result)
-    con = duckdb.connect(str(db_path))
+    con = _connect_db(db_path)
     try:
         con.execute("BEGIN TRANSACTION")
         con.execute(
@@ -501,7 +527,7 @@ def _finish_failure(db_path: Path, job: dict, error: Exception) -> str:
     error_code = "infrastructure_error" if retryable else "input_or_parse_error"
     error_text = str(error)[:2000]
 
-    con = duckdb.connect(str(db_path))
+    con = _connect_db(db_path)
     try:
         con.execute("BEGIN TRANSACTION")
         con.execute(
@@ -593,7 +619,7 @@ def process_one_job(
 
 
 def retry_job(job_prefix: str, db_path: Path = DB_PATH) -> dict:
-    con = duckdb.connect(str(db_path))
+    con = _connect_db(db_path)
     try:
         rows = con.execute(
             "SELECT id, status FROM media_ingestion_jobs WHERE id LIKE ? ORDER BY id",
@@ -623,7 +649,7 @@ def retry_job(job_prefix: str, db_path: Path = DB_PATH) -> dict:
 
 def job_status(db_path: Path = DB_PATH, job_prefix: str | None = None) -> list[dict]:
     init_db(db_path)
-    con = duckdb.connect(str(db_path))
+    con = _connect_db(db_path)
     try:
         where = "WHERE id LIKE ?" if job_prefix else ""
         parameters = [f"{job_prefix}%"] if job_prefix else []
@@ -646,7 +672,7 @@ def queue_health(db_path: Path = DB_PATH) -> dict:
     """Return queue facts suitable for an operator or health check."""
     init_db(db_path)
     now = _utcnow()
-    con = duckdb.connect(str(db_path))
+    con = _connect_db(db_path)
     try:
         counts = {
             status: count
@@ -694,7 +720,7 @@ def cleanup_processed_images(
         raise ValueError("Processed-image retention must be at least one day.")
     init_db(db_path)
     cutoff = (now or _utcnow()) - timedelta(days=retention_days)
-    con = duckdb.connect(str(db_path))
+    con = _connect_db(db_path)
     try:
         rows = con.execute(
             """

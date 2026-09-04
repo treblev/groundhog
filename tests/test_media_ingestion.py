@@ -69,6 +69,27 @@ class MediaIngestionTests(unittest.TestCase):
             for line in path.read_text().splitlines()
         ]
 
+    def test_database_connection_retries_a_brief_lock_collision(self):
+        real_connect = duckdb.connect
+        lock_error = duckdb.IOException("Could not set lock on file")
+
+        with (
+            patch.object(
+                media_ingestion.duckdb,
+                "connect",
+                side_effect=[lock_error, lock_error, real_connect(str(self.db_path))],
+            ) as connect,
+            patch.object(media_ingestion.time, "sleep") as sleep,
+        ):
+            con = media_ingestion._connect_db(self.db_path)
+
+        try:
+            self.assertEqual(con.execute("SELECT 1").fetchone()[0], 1)
+        finally:
+            con.close()
+        self.assertEqual(connect.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
     def test_schema_migration_is_idempotent(self):
         schema.init_db(self.db_path)
         schema.init_db(self.db_path)
