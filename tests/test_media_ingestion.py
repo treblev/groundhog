@@ -90,6 +90,22 @@ class MediaIngestionTests(unittest.TestCase):
         self.assertEqual(connect.call_count, 3)
         self.assertEqual(sleep.call_count, 2)
 
+    def test_database_initialization_retries_a_brief_lock_collision(self):
+        lock_error = duckdb.IOException("Could not set lock on file")
+
+        with (
+            patch.object(
+                media_ingestion,
+                "init_db",
+                side_effect=[lock_error, lock_error, None],
+            ) as initialize,
+            patch.object(media_ingestion.time, "sleep") as sleep,
+        ):
+            media_ingestion._init_db(self.db_path)
+
+        self.assertEqual(initialize.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
     def test_schema_migration_is_idempotent(self):
         schema.init_db(self.db_path)
         schema.init_db(self.db_path)

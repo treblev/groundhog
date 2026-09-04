@@ -71,6 +71,22 @@ def _connect_db(
     raise RuntimeError("DuckDB connection retry loop ended unexpectedly.")
 
 
+def _init_db(
+    db_path: Path,
+    *,
+    attempts: int = DB_LOCK_RETRY_ATTEMPTS,
+    delay_seconds: float = DB_LOCK_RETRY_DELAY_SECONDS,
+) -> None:
+    for attempt in range(attempts):
+        try:
+            init_db(db_path)
+            return
+        except duckdb.Error as error:
+            if not _is_transient_db_lock(error) or attempt == attempts - 1:
+                raise
+            time.sleep(delay_seconds)
+
+
 def _default_spool_dir() -> Path:
     return OPENCLAW_MEDIA_STATE_PATH.parent / "media_spool"
 
@@ -129,7 +145,7 @@ def enqueue_media(
     spool_path = resolved_spool_dir / f"{content_hash}{image_path.suffix.lower()}"
 
     try:
-        init_db(db_path)
+        _init_db(db_path)
     except Exception as error:
         trace = RequestTrace(
             operation=f"{kind}_import",
@@ -648,7 +664,7 @@ def retry_job(job_prefix: str, db_path: Path = DB_PATH) -> dict:
 
 
 def job_status(db_path: Path = DB_PATH, job_prefix: str | None = None) -> list[dict]:
-    init_db(db_path)
+    _init_db(db_path)
     con = _connect_db(db_path)
     try:
         where = "WHERE id LIKE ?" if job_prefix else ""
@@ -670,7 +686,7 @@ def job_status(db_path: Path = DB_PATH, job_prefix: str | None = None) -> list[d
 
 def queue_health(db_path: Path = DB_PATH) -> dict:
     """Return queue facts suitable for an operator or health check."""
-    init_db(db_path)
+    _init_db(db_path)
     now = _utcnow()
     con = _connect_db(db_path)
     try:
@@ -718,7 +734,7 @@ def cleanup_processed_images(
     """Remove old spool/archive copies only when every matching job succeeded."""
     if retention_days < 1:
         raise ValueError("Processed-image retention must be at least one day.")
-    init_db(db_path)
+    _init_db(db_path)
     cutoff = (now or _utcnow()) - timedelta(days=retention_days)
     con = _connect_db(db_path)
     try:
@@ -761,7 +777,7 @@ def cleanup_processed_images(
 
 
 def run_worker(db_path: Path, once: bool, poll_seconds: float) -> None:
-    init_db(db_path)
+    _init_db(db_path)
     next_cleanup_at = 0.0
     while True:
         monotonic_now = time.monotonic()
