@@ -151,7 +151,10 @@ export default definePluginEntry({
       return run;
     };
 
-    api.on("before_agent_run", (event, context) => safeHook(() => ensureRun(event, context)));
+    api.on("before_agent_run", async (event, context) => {
+      await safeHook(() => ensureRun(event, context));
+      return { outcome: "pass" };
+    });
 
     api.on("model_call_started", (event, context) => safeHook(async () => {
       const run = await ensureRun(event, context);
