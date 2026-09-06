@@ -55,13 +55,12 @@ OpenClaw conversational model.
 
 ## OpenClaw schedule
 
-The deployed job runs every Saturday at 6:00 PM Phoenix time. Because Saturday
-is still in progress when the job starts, the default date resolution selects
-the prior fully completed Sunday-through-Saturday week:
+The deployed job runs every Sunday at 9:00 AM Phoenix time. The default date
+resolution therefore selects the Saturday that ended the prior day:
 
 ```text
 name: groundhog-weekly-review
-schedule: cron 0 18 * * 6
+schedule: cron 0 9 * * 0
 timezone: America/Phoenix
 command: venv/bin/python groundhog_service.py summarize weekly --notify
 delivery.mode: none
