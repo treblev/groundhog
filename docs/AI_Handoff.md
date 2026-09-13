@@ -4,9 +4,9 @@
 
 ## 1. Project Purpose and Current Status
 
-**Groundhog** is a personal data pipeline and local AI agent. It ingests health, sleep, workout, spending, and stock market data into a single local DuckDB database, runs technical analysis signals, fires alerts on trading signals, and answers natural-language questions about the data via an LLM agent.
+**Groundhog** is a personal data pipeline and local AI agent. It ingests Garmin activities, health, sleep, workout plans, spending, and stock market data into a single local DuckDB database, runs technical analysis signals, fires alerts on trading signals, and answers natural-language questions about the data via an LLM agent.
 
-**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Production on Linux tracks the `main` branch under the `openclaw` service user. Telegram activity, workout, sleep, and spending screenshots are imported deterministically; Telegram text questions use the direct `/ask <question>` command to invoke the guarded LangGraph agent. `/expense` bypasses chat-model routing, durably queues the exact image, acknowledges immediately, and lets the media worker run the local spending importer. The agent has mutable todos, a 12-tool-call limit, database-grounding retries, an internal-details disclosure guard, and deterministic note prefetch when a question names a ticker with active notes. Dedicated tools cover activity and sleep summaries, exact-date workout lookup, local semantic workout-plan search, data freshness, and a market summary that includes Bitcoin. OpenClaw handles chat, commands, scheduling, and delivery; Groundhog remains the local data and analytics layer.
+**Current status:** Long-running service roadmap Phases 0-5 are complete, Phase 6 daemon mode is implemented with Linux restart/reboot verification still pending, and Phase 7 local agentic summarization/review work is complete. Production on Linux tracks the `main` branch under the `openclaw` service user. Garmin Connect activities are extracted read-only into a local SQLite staging database and imported into DuckDB every day at 5 PM Phoenix time. Telegram activity, workout, sleep, and spending screenshots are imported deterministically; Telegram text questions use the direct `/ask <question>` command to invoke the guarded LangGraph agent. `/expense` bypasses chat-model routing, durably queues the exact image, acknowledges immediately, and lets the media worker run the local spending importer. The agent has mutable todos, a 12-tool-call limit, database-grounding retries, an internal-details disclosure guard, and deterministic note prefetch when a question names a ticker with active notes. Dedicated tools cover activity and sleep summaries, exact-date workout lookup, local semantic workout-plan search, data freshness, and a market summary that includes Bitcoin. OpenClaw handles chat, commands, scheduling, and delivery; Groundhog remains the local data and analytics layer.
 
 ---
 
@@ -14,23 +14,23 @@
 
 ```
 data sources → ingestion/ → DuckDB → analytics/ → alerts
-                    ↑                     ↓
+      ↑             ↑                     ↓
+Garmin Connect → local SQLite             ↓
 Telegram /expense → OpenClaw plugin       mcp_server/ (stdio tools)
                                               ↓
                                   langgraph_client/ (active agent)
-                                  mcp_client/ (legacy reference)
 
 workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ semantic_chunks
                                   ↑                              ↓
                          index script / search refresh ← search_documents
 ```
 
-- **Ingestion**: yfinance (stocks), fitness activity screenshots via vision LLM → `activities`, SugarWOD plan screenshots → `workouts`, Sleep8 screenshots → `sleep_metrics`, and Wallet/bank transaction-list screenshots → `spending`
+- **Ingestion**: yfinance (stocks); `garmin-health-data` read-only extraction → local SQLite → Garmin activity summaries and detail tables in DuckDB; fitness activity screenshots via vision LLM → `activities`; SugarWOD plan screenshots → `workouts`; Sleep8 screenshots → `sleep_metrics`; Wallet/bank transaction-list screenshots → `spending`
 - **Analytics**: SMA50/200 crossover, Supertrend (daily + weekly) → `stock_signals` → `stock_alerts`
 - **Agent**: MCP tool server (stdio JSON-RPC) + LangGraph client (`create_agent()`), replacing the hand-rolled loop
 - **Semantic retrieval**: `search_documents` indexes and ranks stored workout plans, weekly Supertrend alert history, and active user-authored ticker notes locally. It is required for a non-date workout lookup and semantic historical-alert or ticker-note lookup; exact-date retrieval, current market facts, and structured counts/aggregates stay on MCP data tools or `run_sql`.
 - **Direct commands**: OpenClaw's `groundhog-ask-router` handles `/ask`; `groundhog-spending-router` handles `/expense` and `/expense-category`; `groundhog-stock-notes-router` handles ticker-note writes. All bypass outer-model routing and call local code directly.
-- **Scheduling**: OpenClaw cron under `openclaw` (daily stocks: 5 PM America/Phoenix, weekdays)
+- **Scheduling**: OpenClaw cron under `openclaw` (stocks: 5 PM America/Phoenix on weekdays; Garmin: 5 PM daily)
 - **AI**: Ollama local only. `qwen3.6:latest` for SQL/text, `qwen3-vl:latest` for vision, `qwen3-embedding:0.6b` for memory and semantic-search embeddings. No external API calls with personal data.
 
 ---
@@ -50,12 +50,13 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 | `scripts/stock_notes.py` | Canonical ticker-note add/edit/delete/list CLI; preserves revisions and refreshes local note embeddings. |
 | `ingestion/health.py` | Activity-result screenshot importer. Supports a direct `--image` path for OpenClaw attachments and writes to `activities`. |
 | `ingestion/spending.py` | Local vision importer for Wallet and bank transaction lists. Resolves dates, filters pending rows, classifies, deduplicates, archives, and writes to `spending`. |
+| `ingestion/garmin.py` | Idempotent bridge from the extractor's local SQLite database into `activities` and normalized Garmin detail tables. |
 | `analytics/signals.py` | SMA50/200 + Supertrend (daily+weekly). Uses `ta` lib for SMA, manual pandas for Supertrend. |
 | `analytics/alerts.py` | Reads signal direction flips → optional notification → stock_alerts dedup. |
 | `mcp_server/server.py` | MCP stdio tool server. Core data tools plus documented service-state tools in `docs/OpenClaw_MCP.md`. |
-| `mcp_client/client.py` | Old hand-rolled agent loop. Replaced. Keep for reference. |
 | `langgraph_client/client.py` | Active agent. Uses LangChain's `create_agent()` with MCP tools wrapped as async Python functions. |
 | `scripts/ask_groundhog.py` | One-question CLI used by Telegram `/ask`; prints only the guarded agent answer. |
+| `scripts/sync_garmin.py` | Runs the read-only Garmin extractor, then imports the requested trailing date window into Groundhog. Scheduled runs skip existing activities; `--refresh-existing` is for manual repair. |
 | `deploy/openclaw/plugins/groundhog-ask-router/` | Direct OpenClaw `/ask` command that invokes `scripts.ask_groundhog` without outer-model routing. |
 | `deploy/openclaw/plugins/groundhog-request-trace/` | Local JSONL tracing for ordinary OpenClaw request, LLM-call, and tool-call spans. Direct Groundhog subprocesses use `agent/request_trace.py`. |
 | `deploy/openclaw/skills/groundhog-ask/SKILL.md` | Fallback `/ask` routing instructions when the direct plugin is unavailable. |
@@ -100,6 +101,8 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 - **Local AI only**: Ollama, never OpenAI/Anthropic API for personal data
 - **DuckDB not SQLite**: chosen for analytical query performance
 - **OpenClaw cron on Linux**: the Gateway owns the weekday stock schedule; the legacy systemd stock timer is disabled to prevent duplicate runs
+- **Garmin extraction is staged and read-only**: `garmin-health-data` owns authentication and writes `/home/openclaw/data/groundhog/garmin/garmin_data.db`; Groundhog reads that SQLite database and upserts by Garmin activity ID.
+- **Scheduled Garmin imports are incremental**: the daily job extracts a seven-day window and imports only missing activities. Use `--refresh-existing` only when repairing changed detail for an existing activity.
 - **Date from filename, not screenshot**: screenshot OCR for dates is unreliable (workouts + sleep)
 - **`ta` library for SMA, manual pandas for Supertrend**: `pandas-ta` fails on Python 3.14 (numba won't build)
 - **Weekly Supertrend**: resample daily OHLCV to weekly with `resample("W-FRI")` — do not fetch weekly bars from yfinance
@@ -171,9 +174,6 @@ python analytics/alerts.py          # check flips, record deduped alerts, option
 # Update watchlist
 python scripts/update_watchlist.py  # scrape Nasdaq-100 from Wikipedia, merge
 
-# Agent (old hand-rolled)
-python mcp_client/client.py
-
 # Agent (active LangGraph client)
 python langgraph_client/client.py
 
@@ -237,7 +237,15 @@ semantic_chunks      -- derived local vector index: workout chunks and weekly Su
                      -- chunk_kind/index, section_label, title, content, metadata,
                      -- content_hash, embedding_model, embedding, timestamps
 reminders            -- SCD Type 2: valid_from, valid_to, is_current
-activities           -- Garmin activity summary (legacy)
+activities           -- canonical activity summary, including Garmin scalar fields
+garmin_activity_metrics       -- arbitrary scalar running/cycling/supplemental metrics
+garmin_activity_lap_metrics   -- long-form lap metrics
+garmin_activity_split_metrics -- long-form run/walk/interval split metrics
+garmin_activity_samples       -- timestamped sensor samples
+garmin_activity_paths         -- JSON GPS paths and point counts
+garmin_swimming_aggregates    -- pool length, strokes, cadence, and SWOLF
+garmin_strength_exercises     -- exercise-level strength aggregates
+garmin_strength_sets          -- individual strength sets
 spending             -- id, transaction_date, visible_date_label, merchant, amount,
                      --   payment_method, category, source_image_hash, source_row,
                      --   created_at, updated_at
@@ -254,10 +262,11 @@ All tables created idempotently by `ingestion/schema.py`.
 |---------|---------|-------|
 | yfinance | Stock OHLCV data | Free, no auth needed |
 | Wikipedia | Nasdaq-100 ticker list | Requires httpx + browser User-Agent; urllib gets 403 |
+| Garmin Connect | Activity source | Read-only extraction through `garmin-health-data==2.12.0`; auth tokens and staging SQLite stay outside Git |
 | Ollama | LLM inference | Must be reachable at `OLLAMA_BASE_URL`; models: qwen3.6:latest, qwen3-vl:latest, qwen3-embedding:0.6b |
 | notify-send / osascript / stdout | Optional local notification backend | `GROUNDHOG_ALERT_BACKEND=auto|none|notify-send|osascript|stdout` |
 
-No external APIs receive personal data. No API keys needed.
+No external AI APIs receive personal data. Garmin credentials and tokens are managed by the extractor outside this repository.
 
 ---
 
@@ -280,6 +289,7 @@ No external APIs receive personal data. No API keys needed.
 15. **Semantic chunks are not user data to edit directly**: they are rebuildable derived copies of workout text. Use `scripts/index_semantic_documents.py` to refresh them; do not treat them as the canonical workout record.
 16. **Embedding model changes trigger reindexing**: `sync_workout_embeddings()` only reuses a chunk when both its content hash and `embedding_model` match `OLLAMA_EMBEDDING_MODEL`. All compared vectors therefore come from one model/dimension.
 17. **Weekly signals must not be future-dated**: `W-FRI` labels a partial week with that Friday. Keep only labels on or before the Phoenix current date; use `scripts/repair_weekly_supertrend.py` for any premature historical rows.
+18. **Garmin scheduled sync skips existing rows**: the default daily path is intentionally fast and imports only missing activity IDs. Run `scripts/sync_garmin.py --refresh-existing ...` for a targeted repair when Garmin changes an already-imported activity.
 
 ---
 
@@ -301,6 +311,7 @@ In order (most recent last):
 - Added workout ingestion (`ingestion/workouts.py`, `workouts` table)
 - Added deterministic Telegram screenshot intake on Linux. The initial watcher checkpoint ignored existing Telegram images; it processes later files only and records its state at `/home/openclaw/data/groundhog/openclaw_activity_media_state.json`.
 - Added direct activity screenshot ingestion into the existing `activities` table and verified three Telegram uploads end-to-end.
+- Added daily read-only Garmin Connect extraction and idempotent import of activity summaries, scalar metrics, laps, splits, sensor samples, paths, swimming aggregates, and strength details.
 - Added one-shot SugarWOD plan routing, and corrected the importer so one multi-card screenshot creates one combined plan record.
 - Fixed MCP DuckDB locking by removing the persistent connection and import-time schema write.
 - Enriched MCP agent schema context (stock_signals, stock_alerts, workouts hints)

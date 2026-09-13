@@ -10,10 +10,9 @@ Personal data pipeline + local AI agent. Ingests health, sleep, workout, spendin
 
 ```
 config/          settings.py (all paths/models), watchlist.txt
-ingestion/       schema.py, stocks.py, sleep.py, workouts.py, health.py, spending.py
+ingestion/       schema.py, stocks.py, sleep.py, workouts.py, health.py, spending.py, garmin.py
 analytics/       signals.py (SMA+Supertrend), alerts.py (notifications)
 mcp_server/      server.py — stdio MCP tool server (DO NOT MODIFY)
-mcp_client/      client.py — old hand-rolled agent loop (reference only)
 langgraph_client/client.py — active LangGraph agent
 scripts/         daily_stocks.sh, update_watchlist.py
 deploy/openclaw/ OpenClaw skills, plugins, and deployment assets
@@ -46,11 +45,11 @@ python ingestion/stocks.py        # fetch OHLCV for all 105 watchlist tickers
 python ingestion/sleep.py         # process screenshots from data/drop/sleep8/
 python ingestion/workouts.py      # process screenshots from data/drop/workouts/
 python -m ingestion.spending import --image <path> --reference-date YYYY-MM-DD
+python scripts/sync_garmin.py --extractor <garmin-cli> --source-db <garmin.sqlite>
 python analytics/signals.py       # compute SMA50/200 + Supertrend signals
 python analytics/alerts.py        # check direction flips, record deduped alerts, optionally notify
 python scripts/update_watchlist.py  # refresh Nasdaq-100 tickers from Wikipedia
-python mcp_client/client.py       # run old agent (REPL)
-python langgraph_client/client.py # run new agent (incomplete)
+python langgraph_client/client.py # run active agent (REPL)
 python -m unittest discover -s tests -p 'test_*.py'  # offline regression tests
 python tests/smoke_test.py        # live DB, MCP imports, and Ollama memory checks
 ```
@@ -80,6 +79,7 @@ No linter configured.
 | Database | DuckDB | Analytical queries, local file, no server |
 | AI runtime | Ollama (local) | Personal data must not leave the machine |
 | Scheduling | OpenClaw cron | Runs as `openclaw`; daily stocks run at 5pm America/Phoenix on weekdays |
+| Garmin intake | `garmin-health-data` CLI → local SQLite → DuckDB | Read-only extraction; daily 5pm Phoenix sync with a seven-day lookback |
 | Supertrend bands | Manual pandas | pandas-ta fails on Python 3.14 (numba won't build) |
 | SMA | `ta` library | Same reason — pandas-ta broken |
 | Weekly signals | Resample daily OHLCV with `resample("W-FRI")` | Don't fetch weekly bars from yfinance |
@@ -104,6 +104,7 @@ No linter configured.
 9. Vision LLM (`qwen3-vl`) is slow — 14+ min for complex screenshots; only process daily images
 10. Spending screenshots may show a charge and a running balance — import only the charge amount
 11. Pending spending rows are skipped; posted rows require a merchant, amount, and resolvable date
+12. Scheduled Garmin syncs import only missing activities; use `--refresh-existing` manually when repairing an already-imported activity
 
 ---
 
@@ -113,7 +114,7 @@ No linter configured.
 - `config/settings.py` — single source of truth for all paths/models
 - `config/watchlist.txt` custom periods — `INTC 7y`, `BTC-USD max`, `MSFT 10y`, `V 10y`, `NET 7y`, `SNOW 5y`
 - Supertrend implementation in `analytics/signals.py` — verified correct against Pine Script
-- Scheduling mechanism — OpenClaw cron under `openclaw`, `America/Phoenix`, 5pm weekdays
+- Scheduling mechanism — OpenClaw cron under `openclaw`, `America/Phoenix`; stocks run at 5pm weekdays and Garmin runs at 5pm daily
 
 ---
 
@@ -125,6 +126,7 @@ No linter configured.
 - **Signals**: `SELECT COUNT(*) FROM stock_signals WHERE date = (SELECT MAX(date) FROM stock_signals);`
 - **Alerts**: `SELECT * FROM stock_alerts ORDER BY notified_at DESC LIMIT 10;`
 - **Schema changes**: re-run `ingestion/schema.py` — must be idempotent (no errors on second run)
+- **Garmin**: run `python -m unittest tests.test_garmin_ingestion`; verify `groundhog-garmin-sync` in `openclaw cron runs`
 - **Agent**: ask "what is the latest closing price for AAPL?" — should return a number without errors
 - **Spending**: run `python -m unittest tests.test_spending_ingestion tests.test_media_ingestion`; verify `/expense` immediately returns a job ID, later imports posted rows, and `/expense-category` updates one short transaction ID
 - **Anything touching Supertrend**: spot-check AAPL or MSFT direction against TradingView Supertrend (period=10, multiplier=3)

@@ -11,6 +11,55 @@ Current Linux deployment assumptions:
 - Ollama: `http://Vijays-MacBook-Pro.local:11434`
 - Privacy: local Ollama only; no OpenAI or Anthropic fallback
 
+## Garmin Activity Sync
+
+Garmin Connect extraction is read-only and staged outside the repository. The
+`garmin-health-data==2.12.0` CLI and its authentication tokens live under
+`/home/openclaw/apps/garmin-sync`; extracted data is stored at
+`/home/openclaw/data/groundhog/garmin/garmin_data.db`.
+
+OpenClaw job `groundhog-garmin-sync` runs every day at 5 PM
+`America/Phoenix`, with no stagger. It extracts `ACTIVITIES_LIST` and
+`ACTIVITY` for the trailing seven days, then imports missing Garmin activity
+IDs into Groundhog. The job is intentionally incremental; already-imported
+activities are skipped.
+
+Inspect the job and recent runs:
+
+```bash
+openclaw cron show groundhog-garmin-sync --json
+openclaw cron runs --id af0ba297-3c99-43fa-addc-63339cb51d30 --limit 10
+```
+
+Run the same incremental sync manually:
+
+```bash
+cd /home/openclaw/apps/groundhog
+GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb \
+  venv/bin/python scripts/sync_garmin.py \
+  --extractor /home/openclaw/apps/garmin-sync/venv/bin/garmin \
+  --source-db /home/openclaw/data/groundhog/garmin/garmin_data.db \
+  --lookback-days 7
+```
+
+If Garmin changed an activity that is already present, rerun a narrow window
+with `--refresh-existing`. This deletes and rebuilds only that activity's
+normalized child rows:
+
+```bash
+GROUNDHOG_DB_PATH=/home/openclaw/data/groundhog/groundhog.duckdb \
+  venv/bin/python scripts/sync_garmin.py \
+  --extractor /home/openclaw/apps/garmin-sync/venv/bin/garmin \
+  --source-db /home/openclaw/data/groundhog/garmin/garmin_data.db \
+  --lookback-days 2 --refresh-existing
+```
+
+Verify the importer offline with:
+
+```bash
+venv/bin/python -m unittest tests.test_garmin_ingestion
+```
+
 ## Ollama Access
 
 When Groundhog runs on Linux but Ollama runs on the Mac, the Mac Ollama base URL

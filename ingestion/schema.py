@@ -129,6 +129,171 @@ def init_db(db_path: Path | str | None = None):
     con.execute("ALTER TABLE activities ADD COLUMN IF NOT EXISTS swim_pace_seconds_per_100 INTEGER")
     con.execute("ALTER TABLE activities ADD COLUMN IF NOT EXISTS swim_pace_unit VARCHAR")
 
+    # Garmin provides a much richer activity record than the screenshot
+    # importer can see.  Keep the existing, human-friendly summary columns
+    # above for compatibility, and add the scalar Garmin fields here.  Values
+    # that repeat (laps, splits, and timestamped sensor readings) live in the
+    # child tables below rather than being packed into JSON in one row.
+    for column, data_type in (
+        ("activity_source", "VARCHAR"),
+        ("garmin_activity_id", "BIGINT"),
+        ("garmin_user_id", "BIGINT"),
+        ("activity_name", "VARCHAR"),
+        ("activity_type_key", "VARCHAR"),
+        ("event_type_key", "VARCHAR"),
+        ("start_at", "TIMESTAMP"),
+        ("end_at", "TIMESTAMP"),
+        ("timezone_offset_hours", "DOUBLE"),
+        ("elapsed_duration_seconds", "DOUBLE"),
+        ("moving_duration_seconds", "DOUBLE"),
+        ("distance_meters", "DOUBLE"),
+        ("lap_count", "INTEGER"),
+        ("average_speed_mps", "DOUBLE"),
+        ("max_speed_mps", "DOUBLE"),
+        ("start_latitude", "DOUBLE"),
+        ("start_longitude", "DOUBLE"),
+        ("end_latitude", "DOUBLE"),
+        ("end_longitude", "DOUBLE"),
+        ("location_name", "VARCHAR"),
+        ("aerobic_training_effect", "DOUBLE"),
+        ("aerobic_training_effect_message", "VARCHAR"),
+        ("anaerobic_training_effect", "DOUBLE"),
+        ("anaerobic_training_effect_message", "VARCHAR"),
+        ("training_effect_label", "VARCHAR"),
+        ("activity_training_load", "DOUBLE"),
+        ("difference_body_battery", "INTEGER"),
+        ("moderate_intensity_minutes", "INTEGER"),
+        ("vigorous_intensity_minutes", "INTEGER"),
+        ("bmr_calories", "DOUBLE"),
+        ("water_estimated", "DOUBLE"),
+        ("hr_time_in_zone_1", "DOUBLE"),
+        ("hr_time_in_zone_2", "DOUBLE"),
+        ("hr_time_in_zone_3", "DOUBLE"),
+        ("hr_time_in_zone_4", "DOUBLE"),
+        ("hr_time_in_zone_5", "DOUBLE"),
+        ("device_id", "BIGINT"),
+        ("device_manufacturer", "VARCHAR"),
+        ("garmin_time_zone_id", "INTEGER"),
+        ("has_polyline", "BOOLEAN"),
+        ("has_images", "BOOLEAN"),
+        ("has_video", "BOOLEAN"),
+        ("has_splits", "BOOLEAN"),
+        ("has_heat_map", "BOOLEAN"),
+        ("is_parent_activity", "BOOLEAN"),
+        ("purposeful", "BOOLEAN"),
+        ("favorite", "BOOLEAN"),
+        ("elevation_corrected", "BOOLEAN"),
+        ("atp_activity", "BOOLEAN"),
+        ("manual_activity", "BOOLEAN"),
+        ("personal_record", "BOOLEAN"),
+        ("auto_calc_calories", "BOOLEAN"),
+        ("ts_data_available", "BOOLEAN"),
+        ("parent_garmin_activity_id", "BIGINT"),
+    ):
+        con.execute(f"ALTER TABLE activities ADD COLUMN IF NOT EXISTS {column} {data_type}")
+    con.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS activities_garmin_activity_id_uidx "
+        "ON activities(garmin_activity_id)"
+    )
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS garmin_activity_metrics (
+            activity_id VARCHAR NOT NULL,
+            metric_group VARCHAR NOT NULL,
+            metric_name VARCHAR NOT NULL,
+            value DOUBLE,
+            text_value VARCHAR,
+            units VARCHAR,
+            PRIMARY KEY (activity_id, metric_group, metric_name)
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS garmin_activity_lap_metrics (
+            activity_id VARCHAR NOT NULL,
+            lap_index INTEGER NOT NULL,
+            metric_name VARCHAR NOT NULL,
+            value DOUBLE,
+            units VARCHAR,
+            PRIMARY KEY (activity_id, lap_index, metric_name)
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS garmin_activity_split_metrics (
+            activity_id VARCHAR NOT NULL,
+            split_index INTEGER NOT NULL,
+            split_type VARCHAR,
+            metric_name VARCHAR NOT NULL,
+            value DOUBLE,
+            units VARCHAR,
+            PRIMARY KEY (activity_id, split_index, metric_name)
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS garmin_activity_samples (
+            activity_id VARCHAR NOT NULL,
+            sample_timestamp TIMESTAMP NOT NULL,
+            metric_name VARCHAR NOT NULL,
+            value DOUBLE,
+            units VARCHAR,
+            PRIMARY KEY (activity_id, sample_timestamp, metric_name)
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS garmin_activity_paths (
+            activity_id VARCHAR PRIMARY KEY,
+            path_json JSON NOT NULL,
+            point_count INTEGER NOT NULL
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS garmin_swimming_aggregates (
+            activity_id VARCHAR PRIMARY KEY,
+            pool_length_cm DOUBLE,
+            active_lengths INTEGER,
+            strokes DOUBLE,
+            avg_stroke_distance_m DOUBLE,
+            avg_strokes DOUBLE,
+            avg_swim_cadence DOUBLE,
+            avg_swolf DOUBLE
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS garmin_strength_exercises (
+            activity_id VARCHAR NOT NULL,
+            exercise_category VARCHAR,
+            exercise_name VARCHAR,
+            sets INTEGER,
+            reps INTEGER,
+            volume DOUBLE,
+            duration_ms DOUBLE,
+            max_weight DOUBLE,
+            PRIMARY KEY (activity_id, exercise_category, exercise_name)
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS garmin_strength_sets (
+            activity_id VARCHAR NOT NULL,
+            set_index INTEGER NOT NULL,
+            set_type VARCHAR,
+            start_time TIMESTAMP,
+            duration_seconds DOUBLE,
+            wkt_step_index INTEGER,
+            repetition_count INTEGER,
+            weight DOUBLE,
+            exercise_category VARCHAR,
+            exercise_name VARCHAR,
+            exercise_probability DOUBLE,
+            PRIMARY KEY (activity_id, set_index)
+        )
+    """)
+
     con.execute("""
         CREATE TABLE IF NOT EXISTS sleep_metrics (
             date DATE PRIMARY KEY,
