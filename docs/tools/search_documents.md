@@ -1,6 +1,6 @@
 # `search_documents`
 
-Search stored workout plans, historical weekly Supertrend alerts, or user-authored ticker notes by meaning or similarity. Use domain='workout' for non-date workout lookup and domain='stock_alert' for historical weekly flips; use domain='stock_note' for semantic note retrieval. Use structured tools for exact dates, counts, and market facts.
+Search stored workout plans, historical weekly Supertrend alerts, user-authored ticker notes, or Garmin activity progress notes by meaning or similarity. Use domain='activity_progress' for generated weekly and monthly activity notes. Use structured tools for exact dates, counts, and metrics.
 
 ## Arguments
 
@@ -31,3 +31,11 @@ Optional exact ticker filter for stock-alert retrieval.
 ### `direction`
 
 Optional weekly Supertrend direction filter.
+
+### `activity_type`
+
+Optional exact Garmin activity_type_key filter for activity-progress retrieval.
+
+### `period_kind`
+
+Optional weekly or monthly filter for activity-progress retrieval.

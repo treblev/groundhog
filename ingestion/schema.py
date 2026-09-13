@@ -480,6 +480,24 @@ def init_db(db_path: Path | str | None = None):
     """)
 
     con.execute("""
+        CREATE TABLE IF NOT EXISTS activity_progress_notes (
+            id VARCHAR PRIMARY KEY,
+            period_kind VARCHAR NOT NULL CHECK (period_kind IN ('weekly', 'monthly')),
+            period_start DATE NOT NULL,
+            period_end DATE NOT NULL,
+            activity_key VARCHAR NOT NULL,
+            note_kind VARCHAR NOT NULL CHECK (note_kind IN ('activity', 'rollup')),
+            facts JSON NOT NULL,
+            narrative TEXT NOT NULL,
+            model VARCHAR NOT NULL,
+            facts_hash VARCHAR NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (period_kind, period_start, period_end, activity_key)
+        )
+    """)
+
+    con.execute("""
         CREATE TABLE IF NOT EXISTS spending (
             id VARCHAR PRIMARY KEY,
             transaction_date DATE NOT NULL,

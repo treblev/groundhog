@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import duckdb
 
+from agent.activity_progress import generate_activity_progress_notes
 from agent.events import event_id_for, record_event
 from agent.outbox import enqueue_event
 from agent.runs import finish_run, start_run
@@ -363,8 +364,13 @@ def main(argv: list[str] | None = None) -> int:
     daemon_parser = commands.add_parser("daemon", help="Poll for and run due Groundhog tasks.")
     daemon_parser.add_argument("--poll-seconds", type=int, default=60)
     summary_parser = commands.add_parser("summarize", help="Generate a local derived summary.")
-    summary_parser.add_argument("kind", choices=["daily", "weekly"])
+    summary_parser.add_argument("kind", choices=["daily", "weekly", "activity"])
     summary_parser.add_argument("--date", type=date.fromisoformat)
+    summary_parser.add_argument(
+        "--period",
+        choices=["weekly", "monthly"],
+        help="Required period grain for summarize activity.",
+    )
     summary_parser.add_argument(
         "--notify",
         action="store_true",
@@ -386,8 +392,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "summarize":
         if args.kind == "daily" and args.date is None:
             parser.error("summarize daily requires --date YYYY-MM-DD")
-        if args.kind == "daily" and args.notify:
+        if args.kind in {"daily", "activity"} and args.notify:
             parser.error("--notify is supported only for weekly reviews")
+        if args.kind == "activity" and args.period is None:
+            parser.error("summarize activity requires --period weekly|monthly")
+        if args.kind != "activity" and args.period is not None:
+            parser.error("--period is supported only for activity summaries")
         review_date = args.date
         if args.kind == "weekly" and review_date is None:
             from agent.weekly_reviewer import latest_completed_week_end
@@ -397,11 +407,14 @@ def main(argv: list[str] | None = None) -> int:
         con = duckdb.connect(str(DB_PATH))
         try:
             prioritize_pending_outbox(con)
-            content = (
-                generate_daily_summary(con, review_date)
-                if args.kind == "daily"
-                else generate_weekly_review(con, review_date)
-            )
+            if args.kind == "daily":
+                content = generate_daily_summary(con, review_date)
+            elif args.kind == "weekly":
+                content = generate_weekly_review(con, review_date)
+            else:
+                content = generate_activity_progress_notes(
+                    con, args.period, review_date, today=datetime.now(PHOENIX).date()
+                )
             if args.kind == "weekly" and args.notify:
                 weekly_review_key = f"weekly_review_generated:{review_date.isoformat()}"
                 if record_event(
@@ -424,7 +437,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.kind == "weekly" and args.notify:
             print(f"Weekly review queued for week ending {review_date}.")
         else:
-            print(content)
+            print(json.dumps(content, default=_json_default, sort_keys=True) if isinstance(content, dict) else content)
         return 0
 
     if args.command == "query":

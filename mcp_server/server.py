@@ -12,6 +12,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+from agent.activity_progress import activity_progress
 from agent.memory import remember, recall
 from agent.outbox import set_outbox_status
 from agent.semantic_search import search_documents
@@ -29,6 +30,7 @@ _TOOL_NAMES = frozenset(
         "query_stock_alerts",
         "get_recent_activities",
         "get_activity_summary",
+        "get_activity_progress",
         "get_sleep_summary",
         "get_workout_for_date",
         "search_documents",
@@ -143,6 +145,34 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {"start_date": {"type": "string"}, "end_date": {"type": "string"}}, "required": []},
         ),
         Tool(
+            name="get_activity_progress",
+            description=_description("get_activity_progress"),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "period_kind": {
+                        "type": "string",
+                        "enum": ["weekly", "monthly"],
+                        "description": _argument_description("get_activity_progress", "period_kind"),
+                    },
+                    "period_end": {
+                        "type": "string",
+                        "description": _argument_description("get_activity_progress", "period_end"),
+                    },
+                    "activity_type": {
+                        "type": "string",
+                        "description": _argument_description("get_activity_progress", "activity_type"),
+                    },
+                    "current": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": _argument_description("get_activity_progress", "current"),
+                    },
+                },
+                "required": ["period_kind"],
+            },
+        ),
+        Tool(
             name="get_sleep_summary",
             description=_description("get_sleep_summary"),
             inputSchema={"type": "object", "properties": {"start_date": {"type": "string"}, "end_date": {"type": "string"}}, "required": []},
@@ -159,7 +189,7 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": _argument_description("search_documents", "query")},
-                    "domain": {"type": "string", "enum": ["workout", "stock_alert", "stock_note"], "default": "workout"},
+                    "domain": {"type": "string", "enum": ["workout", "stock_alert", "stock_note", "activity_progress"], "default": "workout"},
                     "top_k": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
                     "start_date": {"type": "string", "description": _argument_description("search_documents", "start_date")},
                     "end_date": {"type": "string", "description": _argument_description("search_documents", "end_date")},
@@ -167,6 +197,8 @@ async def list_tools() -> list[Tool]:
                     "structure_type": {"type": "string", "description": _argument_description("search_documents", "structure_type")},
                     "ticker": {"type": "string", "description": _argument_description("search_documents", "ticker")},
                     "direction": {"type": "string", "enum": ["bullish", "bearish"], "description": _argument_description("search_documents", "direction")},
+                    "activity_type": {"type": "string", "description": _argument_description("search_documents", "activity_type")},
+                    "period_kind": {"type": "string", "enum": ["weekly", "monthly"], "description": _argument_description("search_documents", "period_kind")},
                 },
                 "required": ["query"],
             },
@@ -312,6 +344,8 @@ def _dispatch(
             structure_type=args.get("structure_type"),
             ticker=args.get("ticker"),
             direction=args.get("direction"),
+            activity_type=args.get("activity_type"),
+            period_kind=args.get("period_kind"),
             db_path=db_path,
         )
         return json.dumps(results, default=_json_default)
@@ -457,6 +491,18 @@ def _dispatch_with_connection(
                    AVG(avg_hr) AS average_hr
             FROM activities {where}
         """, parameters)
+
+    if name == "get_activity_progress":
+        return json.dumps(
+            activity_progress(
+                con,
+                args["period_kind"],
+                args.get("period_end"),
+                activity_type=args.get("activity_type"),
+                current=args.get("current", False),
+            ),
+            default=_json_default,
+        )
 
     if name == "get_sleep_summary":
         where, parameters = _date_range(args, "date")

@@ -28,7 +28,7 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 - **Ingestion**: yfinance (stocks); `garmin-health-data` read-only extraction → local SQLite → Garmin activity summaries and detail tables in DuckDB; fitness activity screenshots via vision LLM → `activities`; SugarWOD plan screenshots → `workouts`; Sleep8 screenshots → `sleep_metrics`; Wallet/bank transaction-list screenshots → `spending`
 - **Analytics**: SMA50/200 crossover, Supertrend (daily + weekly) → `stock_signals` → `stock_alerts`
 - **Agent**: MCP tool server (stdio JSON-RPC) + LangGraph client (`create_agent()`), replacing the hand-rolled loop
-- **Semantic retrieval**: `search_documents` indexes and ranks stored workout plans, weekly Supertrend alert history, and active user-authored ticker notes locally. It is required for a non-date workout lookup and semantic historical-alert or ticker-note lookup; exact-date retrieval, current market facts, and structured counts/aggregates stay on MCP data tools or `run_sql`.
+- **Semantic retrieval**: `search_documents` indexes and ranks stored workout plans, weekly Supertrend alert history, active user-authored ticker notes, and Garmin activity-progress notes locally. Exact activity comparisons use `get_activity_progress`; exploratory history uses semantic retrieval.
 - **Direct commands**: OpenClaw's `groundhog-ask-router` handles `/ask`; `groundhog-spending-router` handles `/expense` and `/expense-category`; `groundhog-stock-notes-router` handles ticker-note writes. All bypass outer-model routing and call local code directly.
 - **Scheduling**: OpenClaw cron under `openclaw` (stocks: 5 PM America/Phoenix on weekdays; Garmin: 5 PM daily)
 - **AI**: Ollama local only. `qwen3.6:latest` for SQL/text, `qwen3-vl:latest` for vision, `qwen3-embedding:0.6b` for memory and semantic-search embeddings. No external API calls with personal data.
@@ -47,6 +47,7 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 | `ingestion/workouts.py` | Drops SugarWOD screenshots → vision LLM → workouts upsert. Hash-based dedup ID. |
 | `agent/embeddings.py` | Validates and sends batches to Ollama's configured `/api/embed` endpoint. |
 | `agent/semantic_search.py` | Builds versioned workout chunks, refreshes their derived vectors idempotently, and ranks semantic search results in DuckDB. |
+| `agent/activity_progress.py` | Builds Garmin-only weekly/monthly progress facts and type-specific notes, including estimated stair counts and swim timer cleanup. |
 | `scripts/stock_notes.py` | Canonical ticker-note add/edit/delete/list CLI; preserves revisions and refreshes local note embeddings. |
 | `ingestion/health.py` | Activity-result screenshot importer. Supports a direct `--image` path for OpenClaw attachments and writes to `activities`. |
 | `ingestion/spending.py` | Local vision importer for Wallet and bank transaction lists. Resolves dates, filters pending rows, classifies, deduplicates, archives, and writes to `spending`. |
@@ -62,12 +63,13 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 | `deploy/openclaw/skills/groundhog-ask/SKILL.md` | Fallback `/ask` routing instructions when the direct plugin is unavailable. |
 | `deploy/openclaw/plugins/groundhog-spending-router/` | Direct OpenClaw command plugin for `/expense` imports and `/expense-category` corrections. |
 | `deploy/openclaw/plugins/groundhog-stock-notes-router/` | Direct OpenClaw command plugin for ticker-note add/edit/delete/list actions. |
-| `groundhog_service.py` | Service CLI: `run daily-stocks` and `status` |
+| `groundhog_service.py` | Service CLI for scheduled jobs, status, read-only inspection, and daily/weekly/activity summaries. |
 | `scripts/daily_stocks.sh` | Manual compatibility entrypoint to `groundhog_service.py run daily-stocks` |
 | `scripts/openclaw_deliver_outbox.py` | OpenClaw-side delivery bridge: Groundhog MCP outbox → OpenClaw Telegram → mark delivered on success. |
 | `scripts/import_openclaw_activity_media.py` | Deterministic OpenClaw media watcher. Checkpoints old files, imports each new attachment once, and has one-shot `--next-kind plan` routing. |
 | `scripts/update_watchlist.py` | Scrapes Nasdaq-100 from Wikipedia, merges into watchlist.txt. |
-| `scripts/index_semantic_documents.py` | Manual/dry-run refresh entry point for local workout, weekly-alert, and memory embeddings. |
+| `scripts/index_semantic_documents.py` | Manual/dry-run refresh entry point for workout, alert, stock-note, activity-progress, and memory embeddings. |
+| `docs/Activity_Progress_Notes.md` | Garmin-only activity note metrics, commands, and OpenClaw schedules. |
 | `docs/Stock_Alert_Semantic_Search.md` | Design and operating boundary for semantic retrieval of weekly Supertrend alert history. |
 | `docs/Stock_Semantic_Notes.md` | Canonical user ticker notes, revision history, direct commands, and semantic retrieval boundary. |
 | `deploy/systemd/user/groundhog-stocks.service` | systemd user service retained as a manual fallback for the daily stock pipeline. |
@@ -109,7 +111,7 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 - **Weekly Supertrend only uses completed weeks**: Friday-labelled resampled bars are excluded until that Friday arrives; this prevents Monday–Thursday data from producing future-dated weekly signals or alerts.
 - **Hash-based workout IDs**: `SHA256(date|name|description[:50])[:16]` for safe re-runs
 - **Workout semantic index is derived, local, and versioned**: index one whole-plan chunk plus recognized Fitness, Performance, HYROX, Tread, Row, and Floor sections. Store source metadata, content hashes, model name, and vectors in `semantic_chunks`; refresh changed/model-mismatched chunks and delete stale chunks. `workouts` remains the source of truth.
-- **Semantic retrieval is for workout intent, weekly Supertrend alert history, and ticker-note research context**: `search_documents` embeds a query locally and uses DuckDB cosine similarity. Workout search returns the best chunk per workout; stock-alert search returns qualifying weekly bullish/bearish flips; stock-note search returns active user-authored notes. Ticker filters are supported for both stock domains. Do not use it for exact-date workout retrieval, current stock facts, aggregates, OHLCV bars, or signal-state queries.
+- **Semantic retrieval includes Garmin activity-progress history**: `search_documents` embeds a query locally and uses DuckDB cosine similarity. Activity-progress search supports activity-type, weekly/monthly, and date filters. Use `get_activity_progress` for exact period facts; semantic notes are discovery context, not the source for recalculating metrics.
 - **`/ask` request routing is deterministic and feature-flagged**: with `GROUNDHOG_ASK_ROUTING_ENABLED=1`, high-confidence stock-note, stock-alert, semantic-workout, and latest-price questions execute one purpose-built MCP retrieval before a compact evidence-only answer prompt. Ambiguous requests use the general fallback with a small domain index and on-demand schema inspection. The disabled path preserves the legacy full-context flow for baseline evaluation and rollback. Business-date interpretation uses `GROUNDHOG_ASK_TIMEZONE` (default `America/Phoenix`).
 - **Telegram screenshots are deterministic**: do not rely on the OpenClaw chat model to interpret an image. `groundhog-openclaw-media.timer` scans `/home/openclaw/media/inbound` once per minute and calls the local `qwen3-vl:latest` importer.
 - **Spending uses a registered command and durable queue, not model routing**: `/expense` is owned by the OpenClaw spending plugin, which queues `kind=expense`; the media worker invokes the spending importer. This prevents generic chat responses, repeated tool-selection attempts, and a slow vision call blocking the Gateway command.
@@ -231,8 +233,8 @@ stock_note_revisions -- append-only stock-note text and lifecycle history
 sleep_metrics        -- date, resting_hr, hrv, breath_rate,
                      --   time_to_fall_asleep_minutes (nullable), deep_sleep_minutes (nullable)
 workouts             -- id, date, day_of_week, name, category, structure_type, description
-semantic_chunks      -- derived local vector index: workout chunks and weekly Supertrend alerts;
-                       active ticker-note chunks use domain stock_note
+semantic_chunks      -- derived local vector index: workout chunks, weekly Supertrend alerts,
+                       active ticker notes, and Garmin activity-progress notes
                      -- id, domain, source_id, source_date,
                      -- chunk_kind/index, section_label, title, content, metadata,
                      -- content_hash, embedding_model, embedding, timestamps
@@ -246,6 +248,7 @@ garmin_activity_paths         -- JSON GPS paths and point counts
 garmin_swimming_aggregates    -- pool length, strokes, cadence, and SWOLF
 garmin_strength_exercises     -- exercise-level strength aggregates
 garmin_strength_sets          -- individual strength sets
+activity_progress_notes       -- weekly/monthly Garmin-only facts and local narratives by activity type
 spending             -- id, transaction_date, visible_date_label, merchant, amount,
                      --   payment_method, category, source_image_hash, source_row,
                      --   created_at, updated_at
@@ -329,6 +332,7 @@ In order (most recent last):
 - Added local workout semantic search: Ollama embeddings, idempotent DuckDB chunk index, semantic MCP tool, query filters, and LangGraph guidance requiring it for non-date workout requests
 - Added local semantic retrieval for historical weekly Supertrend alerts, derived from `stock_alerts` with ticker, direction, and date filters; prices and current signal state remain structured queries
 - Added editable canonical ticker notes with append-only revisions, direct Telegram commands, and local semantic retrieval in the `stock_note` domain
+- Added Garmin-only weekly/monthly activity progress notes, exact MCP retrieval, and semantic search; stairs use elapsed minutes × 32 and forgotten-timer 25-yard swim lengths contribute distance only
 - Fixed partial-week weekly Supertrend handling, added repair tooling for premature future-dated alerts, and queued a Telegram completion summary after every daily stock run
 
 ---

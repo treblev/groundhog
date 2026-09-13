@@ -18,6 +18,7 @@ class RouteId(StrEnum):
     LATEST_PRICE = "latest_price"
     WEEKLY_HEALTH_SUMMARY = "weekly_health_summary"
     WEEKLY_MARKET_SUMMARY = "weekly_market_summary"
+    ACTIVITY_PROGRESS = "activity_progress"
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,9 @@ class RequestFeatures:
     start_date: str | None = None
     end_date: str | None = None
     timeframe: str | None = None
+    period_kind: str | None = None
+    activity_type: str | None = None
+    current: bool = False
     direction: str | None = None
     ordering: str = "desc"
     limit: int | None = None
@@ -86,6 +90,25 @@ _WEEKLY_MARKET_SUMMARY_RE = re.compile(
     r"\b(?:weekly|week(?:ly)?\s+(?:ending|summary))\b.*\bmarket\b|\bmarket\b.*\bweekly\b",
     re.IGNORECASE,
 )
+_ACTIVITY_PROGRESS_RE = re.compile(
+    r"\b(?:treadmill|stairs?|stair[ -]?climb(?:ing)?|swim(?:ming)?|walk(?:ing)?|strength|"
+    r"activit(?:y|ies))\b.*\b(?:progress|trend|compare|comparison|week|month|baseline|pace|distance|heart\s*rate|hr|stairs?)\b|"
+    r"\b(?:progress|trend|compare|comparison|week|month|baseline)\b.*\b(?:treadmill|stairs?|swim(?:ming)?|walk(?:ing)?|strength|activit(?:y|ies))\b",
+    re.IGNORECASE,
+)
+
+
+def _activity_type(question: str) -> str | None:
+    for pattern, activity_key in (
+        (r"\btreadmill\b", "treadmill_running"),
+        (r"\bstair(?:s|[ -]?climb(?:ing)?)?\b", "stair_climbing"),
+        (r"\bswim(?:ming)?\b", "lap_swimming"),
+        (r"\bwalk(?:ing)?\b", "walking"),
+        (r"\bstrength\b", "strength_training"),
+    ):
+        if re.search(pattern, question, re.IGNORECASE):
+            return activity_key
+    return None
 
 
 def looks_like_stock_request(question: str) -> bool:
@@ -149,6 +172,18 @@ def extract_features(
     start_date = dates[0] if dates else None
     end_date = dates[1] if len(dates) > 1 else start_date
     limit = _limit(question)
+
+    if _ACTIVITY_PROGRESS_RE.search(question):
+        monthly = bool(re.search(r"\bmonth(?:ly|\s+over\s+month)?\b", question, re.IGNORECASE))
+        current = bool(re.search(r"\bthis\s+(?:week|month)\b", question, re.IGNORECASE))
+        return RequestFeatures(
+            domain="activity_progress",
+            operation="summary",
+            end_date=None if current else (dates[-1] if dates else None),
+            period_kind="monthly" if monthly else "weekly",
+            activity_type=_activity_type(question),
+            current=current,
+        )
 
     if _WEEKLY_HEALTH_SUMMARY_RE.search(question):
         return RequestFeatures(
@@ -277,7 +312,26 @@ def _weekly_summary_arguments(features: RequestFeatures, _question: str) -> dict
     return {"week_end": features.end_date} if features.end_date else {}
 
 
+def _activity_progress_arguments(features: RequestFeatures, _question: str) -> dict:
+    arguments = {"period_kind": features.period_kind or "weekly"}
+    if features.end_date:
+        arguments["period_end"] = features.end_date
+    if features.activity_type:
+        arguments["activity_type"] = features.activity_type
+    if features.current:
+        arguments["current"] = True
+    return arguments
+
+
 ROUTE_REGISTRY: tuple[RouteSpec, ...] = (
+    RouteSpec(
+        RouteId.ACTIVITY_PROGRESS,
+        "activity_progress",
+        "summary",
+        "get_activity_progress",
+        _activity_progress_arguments,
+        "Describe only the Garmin activity facts and comparisons returned. Distinguish estimated stair counts from measured metrics and do not treat volume changes as fitness judgments.",
+    ),
     RouteSpec(
         RouteId.WEEKLY_HEALTH_SUMMARY,
         "weekly_health",

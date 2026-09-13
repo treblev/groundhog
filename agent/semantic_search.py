@@ -18,7 +18,13 @@ from config.settings import DB_PATH, OLLAMA_EMBEDDING_MODEL
 DOMAIN_WORKOUT = "workout"
 DOMAIN_STOCK_ALERT = "stock_alert"
 DOMAIN_STOCK_NOTE = "stock_note"
-SUPPORTED_DOMAINS = {DOMAIN_WORKOUT, DOMAIN_STOCK_ALERT, DOMAIN_STOCK_NOTE}
+DOMAIN_ACTIVITY_PROGRESS = "activity_progress"
+SUPPORTED_DOMAINS = {
+    DOMAIN_WORKOUT,
+    DOMAIN_STOCK_ALERT,
+    DOMAIN_STOCK_NOTE,
+    DOMAIN_ACTIVITY_PROGRESS,
+}
 BATCH_SIZE = 32
 MAX_RESULTS = 10
 _WEEKLY_SUPERTREND_ALERT_TYPES = {
@@ -311,6 +317,65 @@ def stock_note_chunks(note: dict) -> list[dict]:
     ]
 
 
+def _activity_progress_notes(con: duckdb.DuckDBPyConnection) -> list[dict]:
+    cursor = con.execute(
+        """
+        SELECT id, period_kind, period_start, period_end, activity_key,
+               note_kind, facts, narrative, updated_at
+        FROM activity_progress_notes
+        ORDER BY period_end, activity_key
+        """
+    )
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def activity_progress_chunks(note: dict) -> list[dict]:
+    """Create one searchable chunk for a stored Garmin progress note."""
+    content = (note.get("narrative") or "").strip()
+    if not content:
+        return []
+    activity_key = note["activity_key"]
+    period_kind = note["period_kind"]
+    metadata = {
+        "activity_type": activity_key,
+        "period_kind": period_kind,
+        "note_kind": note["note_kind"],
+        "period_start": str(note["period_start"]),
+        "period_end": str(note["period_end"]),
+    }
+    display_type = "all activities" if activity_key == "all" else activity_key.replace("_", " ")
+    embedding_input = "\n".join(
+        [
+            "Document type: Garmin activity progress note",
+            f"Period: {period_kind} {note['period_start']} through {note['period_end']}",
+            f"Activity type: {display_type}",
+            f"Note: {content}",
+        ]
+    )
+    chunk_key = f"{DOMAIN_ACTIVITY_PROGRESS}|{note['id']}|period_note|0"
+    hash_input = json.dumps(
+        {"embedding_input": embedding_input, "metadata": metadata},
+        sort_keys=True,
+    )
+    return [
+        {
+            "id": _hash(chunk_key)[:32],
+            "domain": DOMAIN_ACTIVITY_PROGRESS,
+            "source_id": note["id"],
+            "source_date": note["period_end"],
+            "chunk_kind": "period_note",
+            "chunk_index": 0,
+            "section_label": display_type,
+            "title": f"{display_type.title()} {period_kind} progress",
+            "content": content,
+            "metadata": json.dumps(metadata, sort_keys=True),
+            "content_hash": _hash(hash_input),
+            "embedding_input": embedding_input,
+        }
+    ]
+
+
 def sync_workout_embeddings(
     db_path: Path | str = DB_PATH,
     embedder: Callable[[list[str]], list[list[float]]] = embed_texts,
@@ -362,6 +427,27 @@ def sync_stock_note_embeddings(
     finally:
         con.close()
     return _sync_chunks(DOMAIN_STOCK_NOTE, desired, db_path, embedder, batch_size, dry_run)
+
+
+def sync_activity_progress_embeddings(
+    db_path: Path | str = DB_PATH,
+    embedder: Callable[[list[str]], list[list[float]]] = embed_texts,
+    batch_size: int = BATCH_SIZE,
+    dry_run: bool = False,
+) -> dict:
+    """Idempotently index locally generated Garmin activity progress notes."""
+    con = duckdb.connect(str(db_path), read_only=True)
+    try:
+        desired = [
+            chunk
+            for note in _activity_progress_notes(con)
+            for chunk in activity_progress_chunks(note)
+        ]
+    finally:
+        con.close()
+    return _sync_chunks(
+        DOMAIN_ACTIVITY_PROGRESS, desired, db_path, embedder, batch_size, dry_run
+    )
 
 
 def _sync_chunks(
@@ -494,6 +580,8 @@ def search_documents(
     structure_type: str | None = None,
     ticker: str | None = None,
     direction: str | None = None,
+    activity_type: str | None = None,
+    period_kind: str | None = None,
     db_path: Path | str = DB_PATH,
     embedder: Callable[[list[str]], list[list[float]]] = embed_texts,
     sync: bool = True,
@@ -509,8 +597,10 @@ def search_documents(
             sync_workout_embeddings(db_path, embedder=embedder)
         elif domain == DOMAIN_STOCK_ALERT:
             sync_stock_alert_embeddings(db_path, embedder=embedder)
-        else:
+        elif domain == DOMAIN_STOCK_NOTE:
             sync_stock_note_embeddings(db_path, embedder=embedder)
+        else:
+            sync_activity_progress_embeddings(db_path, embedder=embedder)
     query_vector = embedder([query])[0]
 
     clauses = ["c.domain = ?", "c.embedding_model = ?"]
@@ -534,6 +624,14 @@ def search_documents(
     if direction:
         clauses.append("lower(json_extract_string(c.metadata, '$.direction')) = lower(?)")
         parameters.append(direction)
+    if activity_type:
+        clauses.append("lower(json_extract_string(c.metadata, '$.activity_type')) = lower(?)")
+        parameters.append(activity_type)
+    if period_kind:
+        if period_kind not in {"weekly", "monthly"}:
+            raise ValueError("period_kind must be 'weekly' or 'monthly'")
+        clauses.append("lower(json_extract_string(c.metadata, '$.period_kind')) = lower(?)")
+        parameters.append(period_kind)
     parameters.append(limit)
 
     con = duckdb.connect(str(db_path), read_only=True)
@@ -585,7 +683,7 @@ def search_documents(
                 """,
                 parameters,
             )
-        else:
+        elif domain == DOMAIN_STOCK_NOTE:
             cursor = con.execute(
                 f"""
                 WITH scored AS (
@@ -598,6 +696,24 @@ def search_documents(
                 FROM scored c
                 JOIN stock_notes n ON n.id = c.source_id
                 WHERE NOT n.is_deleted
+                ORDER BY c.score DESC
+                LIMIT ?
+                """,
+                parameters,
+            )
+        else:
+            cursor = con.execute(
+                f"""
+                WITH scored AS (
+                    SELECT c.*, list_cosine_similarity(c.embedding, ?) AS score
+                    FROM semantic_chunks c
+                    WHERE {' AND '.join(clauses)}
+                )
+                SELECT c.source_id, n.period_start, n.period_end, n.period_kind,
+                       n.activity_key AS activity_type, n.note_kind,
+                       n.facts, n.narrative, c.score
+                FROM scored c
+                JOIN activity_progress_notes n ON n.id = c.source_id
                 ORDER BY c.score DESC
                 LIMIT ?
                 """,

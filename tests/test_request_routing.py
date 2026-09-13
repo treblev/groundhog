@@ -18,6 +18,30 @@ def route(question: str):
 
 
 class RequestRoutingTests(unittest.TestCase):
+    def test_activity_progress_routes_to_exact_garmin_summary(self):
+        features = extract_features(
+            "Compare my treadmill progress this month",
+            [],
+            {},
+            date(2026, 9, 13),
+        )
+        match = select_route(features, "Compare my treadmill progress this month")
+
+        self.assertEqual(match.decision.tool, "get_activity_progress")
+        self.assertEqual(match.decision.arguments["period_kind"], "monthly")
+        self.assertEqual(match.decision.arguments["activity_type"], "treadmill_running")
+
+    def test_current_stair_week_sets_current_without_period_end(self):
+        question = "How many stairs did I climb this week?"
+        features = extract_features(question, [], {}, date(2026, 9, 13))
+        match = select_route(features, question)
+
+        self.assertEqual(match.decision.arguments, {
+            "period_kind": "weekly",
+            "activity_type": "stair_climbing",
+            "current": True,
+        })
+
     def test_weekly_health_summary_uses_dedicated_tool(self):
         match = route("Give me my weekly health summary for the week ending 2026-08-29.")
 
