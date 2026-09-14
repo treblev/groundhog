@@ -37,6 +37,21 @@ def _json_default(value):
     raise TypeError(f"{type(value).__name__} is not JSON serializable")
 
 
+def _activity_notification(content: dict) -> str:
+    """Format generated activity facts as a compact user-facing notification."""
+    lines = [
+        f"Garmin activity summary: {content['period_start']} through {content['period_end']}",
+    ]
+    if content.get("rollup", {}).get("narrative"):
+        lines.append(content["rollup"]["narrative"])
+    lines.extend(
+        item["narrative"]
+        for item in content.get("activities", [])
+        if item.get("narrative")
+    )
+    return "\n".join(lines)
+
+
 def query_data(sql: str, max_rows: int = 100) -> dict:
     """Run one read-only DuckDB query and return JSON-ready rows."""
     if max_rows < 1:
@@ -374,7 +389,7 @@ def main(argv: list[str] | None = None) -> int:
     summary_parser.add_argument(
         "--notify",
         action="store_true",
-        help="Queue the generated weekly review through the Groundhog outbox.",
+        help="Queue a weekly review or deliver a weekly activity summary.",
     )
     args = parser.parse_args(argv)
 
@@ -392,8 +407,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "summarize":
         if args.kind == "daily" and args.date is None:
             parser.error("summarize daily requires --date YYYY-MM-DD")
-        if args.kind in {"daily", "activity"} and args.notify:
-            parser.error("--notify is supported only for weekly reviews")
+        if args.kind == "daily" and args.notify:
+            parser.error("--notify is not supported for daily summaries")
+        if args.kind == "activity" and args.notify and args.period != "weekly":
+            parser.error("--notify is supported only for weekly activity summaries")
         if args.kind == "activity" and args.period is None:
             parser.error("summarize activity requires --period weekly|monthly")
         if args.kind != "activity" and args.period is not None:
@@ -436,6 +453,8 @@ def main(argv: list[str] | None = None) -> int:
             con.close()
         if args.kind == "weekly" and args.notify:
             print(f"Weekly review queued for week ending {review_date}.")
+        elif args.kind == "activity" and args.notify:
+            print(_activity_notification(content))
         else:
             print(json.dumps(content, default=_json_default, sort_keys=True) if isinstance(content, dict) else content)
         return 0

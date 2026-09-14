@@ -242,6 +242,22 @@ class ActivityProgressTests(unittest.TestCase):
         generate.assert_called_once()
         self.assertEqual(json.loads(output.getvalue())["period_end"], "2026-09-12")
 
+    def test_activity_notification_is_compact_and_excludes_facts_json(self):
+        content = {
+            "period_start": date(2026, 9, 6),
+            "period_end": WEEK_END,
+            "rollup": {"narrative": "5 sessions across 3 types."},
+            "activities": [
+                {"narrative": "Treadmill: 2 sessions, 2.38 miles."},
+                {"narrative": "Stairs: 1,056 estimated stairs."},
+            ],
+        }
+        message = groundhog_service._activity_notification(content)
+
+        self.assertIn("Garmin activity summary: 2026-09-06 through 2026-09-12", message)
+        self.assertIn("Treadmill: 2 sessions", message)
+        self.assertNotIn("baseline_per_period", message)
+
 
 if __name__ == "__main__":
     unittest.main()

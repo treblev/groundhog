@@ -23,15 +23,17 @@ venv/bin/python scripts/index_semantic_documents.py --domain activity_progress
 
 ## OpenClaw schedules
 
-Run generation after the daily 5 PM Phoenix Garmin sync. These jobs store and
-index notes locally and do not send Telegram messages:
+Run generation after the daily 5 PM Phoenix Garmin sync. The weekly job
+delivers its compact summary to Telegram; the monthly job stores and indexes
+notes without sending a message:
 
 ```text
 name: groundhog-activity-progress-weekly
 schedule: cron 0 18 * * 0
 timezone: America/Phoenix
-command: venv/bin/python groundhog_service.py summarize activity --period weekly && venv/bin/python scripts/index_semantic_documents.py --domain activity_progress
-delivery.mode: none
+command: venv/bin/python groundhog_service.py summarize activity --period weekly --notify && venv/bin/python scripts/index_semantic_documents.py --domain activity_progress
+delivery.mode: announce
+delivery.channel: telegram
 
 name: groundhog-activity-progress-monthly
 schedule: cron 10 18 1 * *
