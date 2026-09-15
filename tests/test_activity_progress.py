@@ -107,6 +107,8 @@ class ActivityProgressTests(unittest.TestCase):
         self.assertEqual(stairs["target"]["stairs_climbed"], 1056)
         self.assertEqual(stairs["target"]["moving_minutes"], 0.0)
         self.assertNotIn("running", {item["activity_key"] for item in facts["activities"]})
+        self.assertEqual(facts["daily_steps"]["target"]["total_steps"], 20000)
+        self.assertEqual(facts["daily_steps"]["target"]["days_recorded"], 1)
 
     def test_swim_25_yard_under_five_seconds_contributes_distance_only(self):
         self._activity(
@@ -246,6 +248,14 @@ class ActivityProgressTests(unittest.TestCase):
         content = {
             "period_start": date(2026, 9, 6),
             "period_end": WEEK_END,
+            "daily_steps": {
+                "target": {
+                    "days_recorded": 7,
+                    "total_steps": 70000,
+                    "average_daily_steps": 10000,
+                },
+                "change_from_previous": {"total_steps_percent": 12.5},
+            },
             "rollup": {"narrative": "5 sessions across 3 types."},
             "activities": [
                 {"narrative": "Treadmill: 2 sessions, 2.38 miles."},
@@ -255,6 +265,7 @@ class ActivityProgressTests(unittest.TestCase):
         message = groundhog_service._activity_notification(content)
 
         self.assertIn("Garmin activity summary: 2026-09-06 through 2026-09-12", message)
+        self.assertIn("Daily steps: 70,000 total (10,000/day average across 7 recorded day(s)); +12.5% vs previous period.", message)
         self.assertIn("Treadmill: 2 sessions", message)
         self.assertNotIn("baseline_per_period", message)
 

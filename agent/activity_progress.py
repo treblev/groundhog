@@ -112,6 +112,27 @@ def _rows(con: duckdb.DuckDBPyConnection, start: date, end: date) -> list[dict[s
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
+def _daily_steps(con: duckdb.DuckDBPyConnection, start: date, end: date) -> dict[str, Any]:
+    """Aggregate whole-day step totals independently of Garmin activities."""
+    row = con.execute(
+        """
+        SELECT COUNT(*) FILTER (WHERE steps IS NOT NULL) AS days_recorded,
+               COALESCE(SUM(steps), 0) AS total_steps,
+               AVG(steps) AS average_daily_steps
+        FROM health_metrics
+        WHERE date BETWEEN ? AND ?
+        """,
+        [start, end],
+    ).fetchone()
+    days_recorded, total_steps, average_daily_steps = row
+    return {
+        "days_recorded": int(days_recorded or 0),
+        "total_steps": int(total_steps or 0),
+        "average_daily_steps": _round(float(average_daily_steps), 0)
+        if average_daily_steps is not None else None,
+    }
+
+
 def _metric_values(
     con: duckdb.DuckDBPyConnection, activity_ids: list[str]
 ) -> dict[str, dict[str, float]]:
@@ -444,6 +465,15 @@ def _comparison(target: dict[str, Any], reference: dict[str, Any]) -> dict[str, 
     }
 
 
+def _step_comparison(target: dict[str, Any], reference: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "total_steps_percent": _percent_change(target.get("total_steps"), reference.get("total_steps")),
+        "average_daily_steps_percent": _percent_change(
+            target.get("average_daily_steps"), reference.get("average_daily_steps")
+        ),
+    }
+
+
 def activity_progress_facts(
     con: duckdb.DuckDBPyConnection,
     period_kind: str,
@@ -458,6 +488,23 @@ def activity_progress_facts(
     target = aggregate_period(con, start, end)
     previous = aggregate_period(con, bounds["previous"][0], bounds["previous"][1])
     baseline_raw = aggregate_period(con, bounds["baseline"][0], bounds["baseline"][1])
+    target_steps = _daily_steps(con, start, end)
+    previous_steps = _daily_steps(con, bounds["previous"][0], bounds["previous"][1])
+    baseline_steps_raw = _daily_steps(con, bounds["baseline"][0], bounds["baseline"][1])
+    baseline_steps = dict(baseline_steps_raw)
+    baseline_steps["days_recorded"] = _round(
+        baseline_steps["days_recorded"] / bounds["baseline"][2], 1
+    )
+    baseline_steps["total_steps"] = _round(
+        baseline_steps["total_steps"] / bounds["baseline"][2], 0
+    )
+    daily_steps = {
+        "target": target_steps,
+        "previous": previous_steps,
+        "baseline_per_period": baseline_steps,
+        "change_from_previous": _step_comparison(target_steps, previous_steps),
+        "change_from_baseline": _step_comparison(target_steps, baseline_steps),
+    }
     keys = sorted(set(target) | set(previous) | set(baseline_raw))
     activities = []
     for key in keys:
@@ -484,6 +531,7 @@ def activity_progress_facts(
         "baseline_start": bounds["baseline"][0],
         "baseline_end": bounds["baseline"][1],
         "baseline_periods": bounds["baseline"][2],
+        "daily_steps": daily_steps,
         "activities": activities,
     }
 
@@ -537,16 +585,27 @@ def _rollup_facts(facts: dict[str, Any]) -> dict[str, Any]:
         "duration_minutes": _round(sum(item["duration_minutes"] for item in target)),
         "calories": int(sum(item["calories"] for item in target)),
         "training_load": _round(sum(item["training_load"] for item in target)),
+        "daily_steps": facts["daily_steps"],
     }
 
 
 def render_rollup_note(rollup: dict[str, Any], start: date, end: date) -> str:
     types = ", ".join(key.replace("_", " ") for key in rollup["activity_types"]) or "none"
-    return (
+    note = (
         f"Garmin activity rollup for {start} through {end}: {rollup['sessions']} session(s), "
         f"{rollup['duration_minutes']:.1f} minutes, and {rollup['training_load']:.1f} training-load points. "
         f"Active types: {types}."
     )
+    steps = rollup.get("daily_steps", {}).get("target", {})
+    if steps.get("days_recorded"):
+        note += (
+            f" Daily steps totaled {steps['total_steps']:,} "
+            f"({steps['average_daily_steps']:,.0f}/day average across "
+            f"{steps['days_recorded']} recorded day(s))."
+        )
+    else:
+        note += f" No daily step totals were recorded from {start} through {end}."
+    return note
 
 
 def _validated_model_note(prompt: str, fallback: str, model_call: Callable[[str], str]) -> str:

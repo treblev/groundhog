@@ -42,6 +42,19 @@ def _activity_notification(content: dict) -> str:
     lines = [
         f"Garmin activity summary: {content['period_start']} through {content['period_end']}",
     ]
+    steps = content.get("daily_steps", {}).get("target", {})
+    if steps.get("days_recorded"):
+        step_line = (
+            f"Daily steps: {steps['total_steps']:,} total "
+            f"({steps['average_daily_steps']:,.0f}/day average across "
+            f"{steps['days_recorded']} recorded day(s))"
+        )
+        change = content.get("daily_steps", {}).get("change_from_previous", {}).get("total_steps_percent")
+        if change is not None:
+            step_line += f"; {change:+.1f}% vs previous period"
+        lines.append(step_line + ".")
+    else:
+        lines.append("Daily steps: no health-metric step totals were recorded for this period.")
     if content.get("rollup", {}).get("narrative"):
         lines.append(content["rollup"]["narrative"])
     lines.extend(
