@@ -39,6 +39,10 @@ class GarminIngestionTests(unittest.TestCase):
             CREATE TABLE activity_path (
                 activity_id INTEGER, path_json TEXT, point_count INTEGER
             );
+            CREATE TABLE steps (
+                user_id INTEGER, timestamp TEXT, value INTEGER,
+                activity_level TEXT, activity_level_constant INTEGER
+            );
             """
         )
         con.execute(
@@ -49,6 +53,14 @@ class GarminIngestionTests(unittest.TestCase):
         con.execute("INSERT INTO activity_ts_metric VALUES (123, '2026-09-06T01:00:01', 'heart_rate', 130, 'bpm')")
         con.execute("INSERT INTO swimming_agg_metrics VALUES (123, 2500, 40, 800, 1.25, 20, 30, 45)")
         con.execute("INSERT INTO activity_path VALUES (123, ?, 2)", ['[[1.0, 2.0], [1.1, 2.1]]'])
+        con.executemany(
+            "INSERT INTO steps VALUES (?, ?, ?, ?, ?)",
+            [
+                (9, "2026-09-05T08:00:00+00:00", 1200, "active", 0),
+                (9, "2026-09-05T08:15:00+00:00", 800, "active", 0),
+                (9, "2026-09-06T08:00:00+00:00", 5000, "active", 0),
+            ],
+        )
         con.commit()
         con.close()
 
@@ -76,6 +88,10 @@ class GarminIngestionTests(unittest.TestCase):
                 self.assertEqual(con.execute("SELECT COUNT(*) FROM garmin_activity_samples").fetchone()[0], 1)
                 self.assertEqual(con.execute("SELECT COUNT(*) FROM garmin_activity_paths").fetchone()[0], 1)
                 self.assertEqual(con.execute("SELECT COUNT(*) FROM garmin_swimming_aggregates").fetchone()[0], 1)
+                self.assertEqual(
+                    con.execute("SELECT date, steps FROM health_metrics ORDER BY date").fetchall(),
+                    [(date(2026, 9, 5), 2000), (date(2026, 9, 6), 5000)],
+                )
             finally:
                 con.close()
 

@@ -1,9 +1,10 @@
 # Garmin Activity Progress Notes
 
-Activity progress notes use only Garmin rows. Legacy activity uploads and daily
-step totals are excluded. Each completed Sunday-through-Saturday week or
-calendar month produces one note per relevant Garmin activity type and one
-rollup.
+Activity-specific progress notes use only Garmin activity rows. Legacy activity
+uploads are excluded. The combined rollup also includes Garmin daily step
+totals, aggregated from 15-minute intervals by Phoenix calendar day. Each
+completed Sunday-through-Saturday week or calendar month produces one note per
+relevant Garmin activity type and one rollup.
 
 Generate a completed period manually:
 
@@ -43,8 +44,9 @@ delivery.mode: none
 ```
 
 Stair counts are estimates based on elapsed workout time at 32 stairs per
-minute. They do not use `health_metrics.steps` or Garmin's generic
-activity-level `steps` and `total_cycles` fields.
+minute. They do not use Garmin's generic activity-level `steps` and
+`total_cycles` fields. Daily steps are a separate whole-day metric in the
+combined rollup and are not assigned to walking, treadmill, or stair sessions.
 
 For lap swimming, a 25-yard length recorded in under five seconds contributes
 distance only. Its time and derived efficiency metrics are excluded.

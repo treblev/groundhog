@@ -19,6 +19,7 @@ import duckdb
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.settings import DB_PATH
+from config.settings import ASK_BUSINESS_TIMEZONE
 from ingestion.schema import init_db
 
 
@@ -98,6 +99,22 @@ def _parse_datetime(value: Any) -> datetime | None:
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
     return parsed
+
+
+def _local_date(value: Any) -> date | None:
+    """Resolve a Garmin timestamp to the configured business timezone date."""
+    if value is None or value == "":
+        return None
+    text = str(value).strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        from zoneinfo import ZoneInfo
+
+        parsed = parsed.astimezone(ZoneInfo(ASK_BUSINESS_TIMEZONE))
+    return parsed.date()
 
 
 def _activity_date(start_at: datetime | None, offset_hours: Any) -> date | None:
@@ -254,6 +271,40 @@ def _delete_children(con: duckdb.DuckDBPyConnection, activity_id: str) -> None:
         con.execute(f"DELETE FROM {table} WHERE activity_id = ?", [activity_id])
 
 
+def _import_daily_steps(
+    target: duckdb.DuckDBPyConnection,
+    source: sqlite3.Connection,
+    start_date: date | None,
+    end_date: date | None,
+) -> dict[str, int]:
+    """Sum Garmin's 15-minute step intervals into one health row per day."""
+    if not _table_exists(source, "steps"):
+        return {"steps_rows_seen": 0, "steps_days_imported": 0}
+    totals: dict[date, int] = {}
+    rows_seen = 0
+    for row in _iter_rows(source, "steps"):
+        row_date = _local_date(row.get("timestamp"))
+        value = _int(row.get("value"))
+        if row_date is None or value is None:
+            continue
+        if start_date and row_date < start_date:
+            continue
+        if end_date and row_date >= end_date:
+            continue
+        rows_seen += 1
+        totals[row_date] = totals.get(row_date, 0) + value
+    for row_date, steps in sorted(totals.items()):
+        target.execute(
+            """
+            INSERT INTO health_metrics (date, steps)
+            VALUES (?, ?)
+            ON CONFLICT (date) DO UPDATE SET steps = excluded.steps
+            """,
+            [row_date, steps],
+        )
+    return {"steps_rows_seen": rows_seen, "steps_days_imported": len(totals)}
+
+
 def _insert_generic_metrics(
     con: duckdb.DuckDBPyConnection,
     source: sqlite3.Connection,
@@ -393,8 +444,10 @@ def import_garmin(source_db: Path | str, groundhog_db: Path | str | None = None,
     source = sqlite3.connect(str(source_path))
     source.row_factory = sqlite3.Row
     target = duckdb.connect(str(target_path))
-    totals = {"activities_seen": 0, "activities_imported": 0, "metrics": 0, "laps": 0, "splits": 0, "samples": 0, "paths": 0, "strength_sets": 0}
+    totals = {"activities_seen": 0, "activities_imported": 0, "metrics": 0, "laps": 0, "splits": 0, "samples": 0, "paths": 0, "strength_sets": 0, "steps_rows_seen": 0, "steps_days_imported": 0}
     try:
+        step_totals = _import_daily_steps(target, source, start_date, end_date)
+        totals.update(step_totals)
         activity_rows = _rows(source, "activity")
         for row in activity_rows:
             totals["activities_seen"] += 1

@@ -37,6 +37,8 @@ def main(argv: list[str] | None = None) -> int:
             "ACTIVITIES_LIST",
             "--data-types",
             "ACTIVITY",
+            "--data-types",
+            "STEPS",
             "--db-path",
             str(args.source_db),
             "--start-date",
