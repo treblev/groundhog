@@ -2,6 +2,8 @@
 
 Search stored workout plans, historical weekly Supertrend alerts, user-authored ticker notes, or Garmin activity progress notes by meaning or similarity. Use domain='activity_progress' for generated weekly and monthly activity notes. Use structured tools for exact dates, counts, and metrics.
 
+Use domain='summary' to find stored daily summaries and weekly reviews by meaning or recurring themes. Summary vectors live alongside their text in derived_artifacts; no semantic_chunks copy is created. Results include source_id, artifact_type, period_start, period_end, content, and score. Summary text is generated interpretation, not authoritative evidence for recalculating metrics. Use structured records for exact facts. Summary search accepts top_k and date filters only; dates filter the period end inclusively.
+
 ## Arguments
 
 ### `query`

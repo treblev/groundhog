@@ -478,6 +478,9 @@ def init_db(db_path: Path | str | None = None):
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    con.execute("ALTER TABLE derived_artifacts ADD COLUMN IF NOT EXISTS embedding FLOAT[]")
+    con.execute("ALTER TABLE derived_artifacts ADD COLUMN IF NOT EXISTS embedding_model VARCHAR")
+    con.execute("ALTER TABLE derived_artifacts ADD COLUMN IF NOT EXISTS embedding_content_hash VARCHAR")
 
     con.execute("""
         CREATE TABLE IF NOT EXISTS activity_progress_notes (

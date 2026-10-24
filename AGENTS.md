@@ -143,5 +143,6 @@ No linter configured.
 
 ## Communication
 
+- Use the production database for live-data questions and verification unless the user explicitly requests local data. Do not use local counts to describe production.
 - Explain issues directly and concisely. State what happened, why it happened, and what changed. Avoid jargon, unnecessary implementation detail, and restating prior context.
 - If the user asks a question, answer the question only. Do not start implementing changes unless the user explicitly asks for implementation.

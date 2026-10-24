@@ -1,8 +1,10 @@
 import json
+import asyncio
 import sys
 import tempfile
 import unittest
 from datetime import date
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
@@ -181,6 +183,26 @@ class McpServiceToolTests(unittest.TestCase):
         self.assertEqual(search.call_args.args[0], "running intervals")
         self.assertEqual(search.call_args.kwargs["domain"], "workout")
         self.assertEqual(search.call_args.kwargs["top_k"], 3)
+
+    def test_summary_domain_is_advertised_and_dispatches_to_canonical_rows(self):
+        tools = asyncio.run(server.list_tools())
+        search_tool = next(tool for tool in tools if tool.name == "search_documents")
+        self.assertIn("summary", search_tool.inputSchema["properties"]["domain"]["enum"])
+        self.con.execute(
+            "INSERT INTO derived_artifacts (id, artifact_type, period_start, period_end, content, model) VALUES ('review-1', 'weekly_review', '2026-07-19', '2026-07-25', 'Sleep improved this week', 'test')"
+        )
+        # Dispatch owns its connections, just as it does in the running MCP server.
+        self.con.close()
+        try:
+            search = partial(server.search_documents, embedder=lambda texts: [[1.0, 0.0] for _ in texts])
+            with patch.object(server, "search_documents", search), patch.object(server, "DB_PATH", self.db_path):
+                result = json.loads(server._dispatch(
+                    "search_documents", {"query": "sleep improvement", "domain": "summary"}
+                ))
+            self.assertEqual(result[0]["source_id"], "review-1")
+            self.assertEqual(result[0]["content"], "Sleep improved this week")
+        finally:
+            self.con = duckdb.connect(str(self.db_path))
 
     def test_semantic_stock_alert_search_forwards_filters(self):
         matches = [{"source_id": "alert-1", "ticker": "TEST", "score": 0.91}]

@@ -309,6 +309,40 @@ Runtime inspection must show `status: loaded`, command `ask`, and no
 diagnostics. Ticker-specific and broader stock questions deterministically
 retrieve active user notes before the local model plans its answer.
 
+## Summary Embeddings
+
+Daily summaries and weekly reviews store their local Ollama vectors alongside
+their text in `derived_artifacts`. Summary generation embeds automatically;
+an embedding failure preserves the summary and leaves it pending for repair.
+Search through `/ask`, for example: “Find past weekly reviews discussing sleep.”
+Exact counts and metrics use SQL rather than similarity ranking. Summary
+retrieval does not automatically add historical context to newly generated reviews.
+
+For deployment or recovery, migrate the schema and backfill existing rows:
+
+```bash
+cd /home/openclaw/apps/groundhog
+venv/bin/python ingestion/schema.py
+venv/bin/python scripts/index_semantic_documents.py --domain summary
+```
+
+The second index run should report zero pending rows. Check coverage without
+printing personal content:
+
+```sql
+SELECT artifact_type, COUNT(*) AS summaries,
+       COUNT(*) FILTER (
+           WHERE embedding IS NOT NULL
+             AND embedding_content_hash = sha256(content)
+       ) AS embedded
+FROM derived_artifacts
+GROUP BY artifact_type;
+```
+
+`search_documents` accepts `domain="summary"`, `query`, `top_k`, and inclusive
+`start_date`/`end_date` filters on the summary's period end. It returns the
+original text and period dates from `derived_artifacts`, not `semantic_chunks`.
+
 ## Local Request Tracing
 
 Install the request tracer to capture ordinary OpenClaw agent turns. Direct

@@ -46,6 +46,7 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 | `ingestion/sleep.py` | Drops sleep screenshots → vision LLM → sleep_metrics upsert. Date from filename. |
 | `ingestion/workouts.py` | Drops SugarWOD screenshots → vision LLM → workouts upsert. Hash-based dedup ID. |
 | `agent/embeddings.py` | Validates and sends batches to Ollama's configured `/api/embed` endpoint. |
+| `agent/artifact_embeddings.py` | Embeds daily summaries and weekly reviews in their existing `derived_artifacts` rows; backfills, repairs, and searches without duplicating text. |
 | `agent/semantic_search.py` | Builds versioned workout chunks, refreshes their derived vectors idempotently, and ranks semantic search results in DuckDB. |
 | `agent/activity_progress.py` | Builds Garmin-only weekly/monthly progress facts and type-specific notes, including estimated stair counts and swim timer cleanup. |
 | `scripts/stock_notes.py` | Canonical ticker-note add/edit/delete/list CLI; preserves revisions and refreshes local note embeddings. |
@@ -163,6 +164,7 @@ python scripts/index_semantic_documents.py
 python scripts/index_semantic_documents.py --domain all
 python scripts/index_semantic_documents.py --domain stock_alert
 python scripts/index_semantic_documents.py --domain stock_note
+python scripts/index_semantic_documents.py --domain summary
 python scripts/index_semantic_documents.py --dry-run
 
 # Inspect or remove accidental future-dated weekly Supertrend artifacts.

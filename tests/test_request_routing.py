@@ -18,6 +18,24 @@ def route(question: str):
 
 
 class RequestRoutingTests(unittest.TestCase):
+    def test_past_review_search_precedes_weekly_health_and_alert_routes(self):
+        for question in (
+            "Find past weekly health reviews discussing poor sleep",
+            "Search weekly reviews that mentioned bearish alerts",
+        ):
+            with self.subTest(question=question):
+                match = route(question)
+                self.assertEqual(match.decision.route_id, RouteId.SUMMARY_SEMANTIC)
+                self.assertEqual(match.decision.arguments["domain"], "summary")
+
+    def test_review_exact_counts_are_not_semantic_search(self):
+        match = route("How many weekly reviews mentioned sleep?")
+        self.assertIsNone(match.decision)
+
+    def test_review_semantic_search_forwards_date_range(self):
+        match = route("Find reviews discussing sleep from 2026-08-01 to 2026-08-29")
+        self.assertEqual(match.decision.arguments["start_date"], "2026-08-01")
+        self.assertEqual(match.decision.arguments["end_date"], "2026-08-29")
     def test_activity_progress_routes_to_exact_garmin_summary(self):
         features = extract_features(
             "Compare my treadmill progress this month",

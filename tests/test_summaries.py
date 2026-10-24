@@ -15,6 +15,9 @@ from ingestion import schema
 
 class SummaryTests(unittest.TestCase):
     def setUp(self):
+        embedding_patch = patch("agent.artifact_embeddings.embed_texts", side_effect=lambda texts: [[1.0, 0.0] for _ in texts])
+        embedding_patch.start()
+        self.addCleanup(embedding_patch.stop)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "groundhog.duckdb"
         schema.init_db(self.db_path)

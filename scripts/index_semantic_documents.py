@@ -8,11 +8,13 @@ import argparse
 import json
 
 from agent.memory import sync_memory_embeddings
+from agent.artifact_embeddings import sync_artifact_embeddings
 from agent.semantic_search import (
     DOMAIN_ACTIVITY_PROGRESS,
     DOMAIN_STOCK_ALERT,
     DOMAIN_STOCK_NOTE,
     DOMAIN_WORKOUT,
+    DOMAIN_SUMMARY,
     sync_activity_progress_embeddings,
     sync_stock_alert_embeddings,
     sync_stock_note_embeddings,
@@ -27,7 +29,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--domain",
-        choices=[DOMAIN_WORKOUT, DOMAIN_STOCK_ALERT, DOMAIN_STOCK_NOTE, DOMAIN_ACTIVITY_PROGRESS, DOMAIN_MEMORY, DOMAIN_ALL],
+        choices=[DOMAIN_WORKOUT, DOMAIN_STOCK_ALERT, DOMAIN_STOCK_NOTE, DOMAIN_ACTIVITY_PROGRESS, DOMAIN_SUMMARY, DOMAIN_MEMORY, DOMAIN_ALL],
         default=DOMAIN_WORKOUT,
     )
     parser.add_argument(
@@ -48,6 +50,8 @@ def main() -> int:
         results[DOMAIN_ACTIVITY_PROGRESS] = sync_activity_progress_embeddings(dry_run=args.dry_run)
     if args.domain in {DOMAIN_MEMORY, DOMAIN_ALL}:
         results[DOMAIN_MEMORY] = sync_memory_embeddings(dry_run=args.dry_run)
+    if args.domain in {DOMAIN_SUMMARY, DOMAIN_ALL}:
+        results[DOMAIN_SUMMARY] = sync_artifact_embeddings(dry_run=args.dry_run)
     output = results[args.domain] if args.domain != DOMAIN_ALL else results
     print(json.dumps(output, sort_keys=True))
     return 0

@@ -1,5 +1,6 @@
 """Local-only LLM summaries over durable Groundhog facts."""
 import hashlib
+import logging
 import time
 from datetime import date, datetime, timezone
 
@@ -8,6 +9,7 @@ import httpx
 
 from config.settings import OLLAMA_CHAT_URL, OLLAMA_SQL_MODEL
 from agent.request_trace import record_llm_call
+from agent.artifact_embeddings import embed_artifact
 
 
 def _artifact_id(artifact_type: str, period_start: date, period_end: date) -> str:
@@ -67,10 +69,26 @@ def _store_artifact(
         """
         INSERT INTO derived_artifacts (id, artifact_type, period_start, period_end, content, model)
         VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, model = EXCLUDED.model
+        ON CONFLICT (id) DO UPDATE SET
+            content = EXCLUDED.content, model = EXCLUDED.model,
+            embedding = CASE WHEN derived_artifacts.content = EXCLUDED.content
+                             THEN derived_artifacts.embedding ELSE NULL END,
+            embedding_model = CASE WHEN derived_artifacts.content = EXCLUDED.content
+                                   THEN derived_artifacts.embedding_model ELSE NULL END,
+            embedding_content_hash = CASE WHEN derived_artifacts.content = EXCLUDED.content
+                                          THEN derived_artifacts.embedding_content_hash ELSE NULL END
         """,
         [artifact_id, artifact_type, period_start, period_end, content, OLLAMA_SQL_MODEL],
     )
+    try:
+        embed_artifact(con, artifact_id)
+    except Exception as error:
+        # Persist and deliver the summary even if Ollama embedding is unavailable.
+        # Search refresh or the index CLI will retry the pending row.
+        logging.getLogger(__name__).warning(
+            "Summary %s saved; embedding pending (%s). Retry with index_semantic_documents --domain summary.",
+            artifact_id, type(error).__name__,
+        )
     return artifact_id
 
 

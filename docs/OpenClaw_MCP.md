@@ -7,8 +7,9 @@ wording and delivery channel.
 ## Semantic Retrieval Architecture
 
 `search_documents` is the read-only semantic retrieval boundary for stored
-workout plans, historical weekly Supertrend alerts, and user-authored ticker notes. Its supported domains are
-`workout`, `stock_alert`, and `stock_note`.
+workout plans, historical weekly Supertrend alerts, user-authored ticker notes,
+Garmin activity-progress notes, and generated summaries. Its supported domains are
+`workout`, `stock_alert`, `stock_note`, `activity_progress`, and `summary`.
 
 ```text
 workouts (authoritative rows)
@@ -25,6 +26,10 @@ stock_alerts (authoritative rows; weekly Supertrend flips only)
 stock_notes (authoritative active user-authored ticker notes)
   → local Ollama /api/embed batches → semantic_chunks
   → query embedding + DuckDB list_cosine_similarity
+
+derived_artifacts (daily_summary and weekly_review text)
+  → local Ollama /api/embed → embedding on the same artifact row
+  → query embedding + DuckDB list_cosine_similarity → stored summary text
 ```
 
 The derived index stores the source workout ID and date, chunk kind/index,
@@ -40,8 +45,16 @@ The index is safe to rebuild: synchronization reads source rows, calls Ollama
 outside a DuckDB write lock, then upserts only chunks whose content hash or
 embedding model changed and deletes stale chunks. Workout rows are never
 modified. Searches refresh the workout index by default; operators can also run
-`python scripts/index_semantic_documents.py [--domain workout|stock_alert|stock_note|memory|all]` or
+`python scripts/index_semantic_documents.py [--domain workout|stock_alert|stock_note|activity_progress|summary|memory|all]` or
 add `--dry-run` to validate without writing.
+
+Daily summaries and weekly reviews embed automatically when saved. They keep
+their content, embedding, embedding model, and content hash together in
+`derived_artifacts`; no copy is made in `semantic_chunks`. Unchanged content
+and model reuse the existing vector. Failed embedding leaves the summary saved
+and pending; summary search or `--domain summary` retries it. Search excludes
+stale hashes, other models, and incompatible dimensions. Summary results are
+generated interpretations; exact calculations still use structured records.
 
 ## Direct Command Boundary
 
@@ -82,7 +95,7 @@ successful send response.
 ### `search_documents` contract
 
 Required input: `query`. Optional inputs are `domain` (`workout`,
-`stock_alert`, or `stock_note`),
+`stock_alert`, `stock_note`, `activity_progress`, or `summary`),
 `top_k` (1–10, default 5), inclusive `start_date` and `end_date`, exact
 case-insensitive `section`, and exact case-insensitive `structure_type`.
 Stock-alert retrieval accepts exact case-insensitive `ticker` and `direction`

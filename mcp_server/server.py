@@ -189,7 +189,7 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": _argument_description("search_documents", "query")},
-                    "domain": {"type": "string", "enum": ["workout", "stock_alert", "stock_note", "activity_progress"], "default": "workout"},
+                    "domain": {"type": "string", "enum": ["workout", "stock_alert", "stock_note", "activity_progress", "summary"], "default": "workout"},
                     "top_k": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
                     "start_date": {"type": "string", "description": _argument_description("search_documents", "start_date")},
                     "end_date": {"type": "string", "description": _argument_description("search_documents", "end_date")},

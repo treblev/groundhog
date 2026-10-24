@@ -13,17 +13,20 @@ from datetime import date
 import duckdb
 
 from agent.embeddings import embed_texts
+from agent.artifact_embeddings import search_artifacts
 from config.settings import DB_PATH, OLLAMA_EMBEDDING_MODEL
 
 DOMAIN_WORKOUT = "workout"
 DOMAIN_STOCK_ALERT = "stock_alert"
 DOMAIN_STOCK_NOTE = "stock_note"
 DOMAIN_ACTIVITY_PROGRESS = "activity_progress"
+DOMAIN_SUMMARY = "summary"
 SUPPORTED_DOMAINS = {
     DOMAIN_WORKOUT,
     DOMAIN_STOCK_ALERT,
     DOMAIN_STOCK_NOTE,
     DOMAIN_ACTIVITY_PROGRESS,
+    DOMAIN_SUMMARY,
 }
 BATCH_SIZE = 32
 MAX_RESULTS = 10
@@ -591,6 +594,13 @@ def search_documents(
         raise ValueError(f"Unsupported semantic-search domain: {domain}")
     if not query.strip():
         raise ValueError("query must not be empty")
+    if domain == DOMAIN_SUMMARY:
+        if any(value is not None for value in (section, structure_type, ticker, direction, activity_type, period_kind)):
+            raise ValueError("Summary search supports only date filters and top_k.")
+        return search_artifacts(
+            query, db_path=db_path, top_k=top_k, start_date=start_date,
+            end_date=end_date, embedder=embedder, sync=sync,
+        )
     limit = max(1, min(int(top_k), MAX_RESULTS))
     if sync:
         if domain == DOMAIN_WORKOUT:

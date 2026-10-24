@@ -19,6 +19,7 @@ class RouteId(StrEnum):
     WEEKLY_HEALTH_SUMMARY = "weekly_health_summary"
     WEEKLY_MARKET_SUMMARY = "weekly_market_summary"
     ACTIVITY_PROGRESS = "activity_progress"
+    SUMMARY_SEMANTIC = "summary_semantic"
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,17 @@ def extract_features(
     end_date = dates[1] if len(dates) > 1 else start_date
     limit = _limit(question)
 
+    # Explicit historical review searches take priority over their topics.
+    # Exact listings/counts and fresh weekly metric summaries retain SQL routes.
+    if re.search(r"\b(?:(?:daily|weekly|past|stored|previous)\s+(?:summary|review)|summaries|reviews)\b", question, re.IGNORECASE) and re.search(
+        r"\b(?:find|search|similar|recurring|themes|mentioned|discussed)\b", question, re.IGNORECASE
+    ) and not re.search(r"\b(?:count|how many|latest|most recent|list every|list all)\b", question, re.IGNORECASE):
+        return RequestFeatures(
+            domain="summary", operation="semantic", start_date=start_date,
+            end_date=end_date, semantic_intent=True,
+            undefined_relative_date=undefined_relative_date,
+        )
+
     if _ACTIVITY_PROGRESS_RE.search(question):
         monthly = bool(re.search(r"\bmonth(?:ly|\s+over\s+month)?\b", question, re.IGNORECASE))
         current = bool(re.search(r"\bthis\s+(?:week|month)\b", question, re.IGNORECASE))
@@ -312,6 +324,14 @@ def _weekly_summary_arguments(features: RequestFeatures, _question: str) -> dict
     return {"week_end": features.end_date} if features.end_date else {}
 
 
+def _summary_search_arguments(features: RequestFeatures, question: str) -> dict:
+    arguments = {"query": question, "domain": "summary", "top_k": 5}
+    for key in ("start_date", "end_date"):
+        if getattr(features, key):
+            arguments[key] = getattr(features, key)
+    return arguments
+
+
 def _activity_progress_arguments(features: RequestFeatures, _question: str) -> dict:
     arguments = {"period_kind": features.period_kind or "weekly"}
     if features.end_date:
@@ -324,6 +344,14 @@ def _activity_progress_arguments(features: RequestFeatures, _question: str) -> d
 
 
 ROUTE_REGISTRY: tuple[RouteSpec, ...] = (
+    RouteSpec(
+        RouteId.SUMMARY_SEMANTIC,
+        "summary",
+        "semantic",
+        "search_documents",
+        _summary_search_arguments,
+        "Describe matching stored summaries and their period dates. These are generated historical interpretations, not verified raw metrics. Do not infer that missing records mean no activity or spending occurred. Do not claim the top matches exhaust all history.",
+    ),
     RouteSpec(
         RouteId.ACTIVITY_PROGRESS,
         "activity_progress",
