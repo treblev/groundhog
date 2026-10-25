@@ -188,16 +188,18 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
                 raise AssertionError("tool should not execute during construction")
 
         names = {
-            tool.__name__
+            (getattr(tool, "name", None) or tool.__name__)
             for tool in _make_tools(
                 Session(),
                 _fallback_tool_names(RequestFeatures(domain="stock_alert", operation="list")),
             )
         }
 
-        self.assertEqual(names, {"run_sql", "query_stock_alerts", "search_documents"})
+        self.assertTrue({"query_stock_alerts", "summarize_stock_alerts", "query_stock_signals", "query_stock_prices", "compare_stock_performance", "get_stock_overview", "get_stock_alert_outcomes", "get_stock_data_coverage"}.issubset(names))
+        self.assertNotIn("get_sleep_summary", names)
+        self.assertNotIn("get_activity_summary", names)
 
-    async def test_runtime_symbols_feed_deterministic_route(self):
+    async def test_stock_question_leaves_tool_choice_to_llm_without_discovery_call(self):
         class Session:
             def __init__(self):
                 self.calls = []
@@ -217,10 +219,36 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
             "What is the latest closing price for NEWIPO?",
         )
 
-        self.assertEqual(features.tickers, ("NEWIPO",))
-        self.assertEqual(decision.route_id, RouteId.LATEST_PRICE)
-        self.assertIsNone(reason)
-        self.assertEqual(session.calls, [("get_stock_symbols", {})])
+        self.assertEqual(features.domain, "stocks")
+        self.assertIsNone(decision)
+        self.assertEqual(reason, "stock_tools_selected_by_model")
+        self.assertEqual(session.calls, [])
+
+    async def test_stock_structured_tool_binding_forwards_relative_period(self):
+        class Session:
+            call_tool = AsyncMock(return_value=SimpleNamespace(content=[SimpleNamespace(text='{"rows":[]}')]))
+        session = Session()
+        tools = _make_tools(session, {"query_stock_alerts", "query_stock_prices"})
+        by_name = {tool.name: tool for tool in tools}
+        await by_name["query_stock_alerts"].ainvoke({"alert_type": "death_cross", "period": "2w"})
+        await by_name["query_stock_prices"].ainvoke({"tickers": ["TEST"]})
+        self.assertEqual(session.call_tool.call_args_list[0].args, ("query_stock_alerts", {"alert_type": "death_cross", "period": "2w"}))
+        self.assertEqual(session.call_tool.call_args_list[1].args, ("query_stock_prices", {"tickers": ["TEST"]}))
+
+    async def test_stock_questions_do_not_choose_a_python_operation_route(self):
+        session = SimpleNamespace(call_tool=AsyncMock())
+        for question in (
+            "List all stocks that have gotten into death cross last 2 weeks?",
+            "Which weekly Supertrend buy alerts are recorded?",
+            "What stock notes do I have for MSFT?",
+            "Give me the weekly market summary",
+        ):
+            with self.subTest(question=question):
+                features, decision, reason = await _route_question(session, question)
+                self.assertEqual(features.domain, "stocks")
+                self.assertIsNone(decision)
+                self.assertEqual(reason, "stock_tools_selected_by_model")
+        session.call_tool.assert_not_awaited()
 
     async def test_routed_model_prompt_contains_evidence_but_no_schema_or_tools(self):
         class Model:

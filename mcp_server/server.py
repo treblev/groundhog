@@ -12,6 +12,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+from agent.stock_tools import STOCK_TOOL_SCHEMAS, dispatch_stock_tool, documented_schema
 from agent.activity_progress import activity_progress
 from agent.memory import remember, recall
 from agent.outbox import set_outbox_status
@@ -23,6 +24,7 @@ from mcp_server.tool_docs import ToolDocumentationError, load_tool_documentation
 
 _TOOL_NAMES = frozenset(
     {
+        *STOCK_TOOL_SCHEMAS,
         "run_sql",
         "get_latest_price",
         "get_stock_symbols",
@@ -110,26 +112,13 @@ async def list_tools() -> list[Tool]:
                 "required": [],
             },
         ),
-        Tool(
-            name="query_stock_alerts",
-            description=_description("query_stock_alerts"),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tickers": {"type": "array", "items": {"type": "string"}},
-                    "start_date": {"type": "string", "description": _argument_description("query_stock_alerts", "start_date")},
-                    "end_date": {"type": "string", "description": _argument_description("query_stock_alerts", "end_date")},
-                    "timeframe": {"type": "string", "enum": ["daily", "weekly"]},
-                    "direction": {"type": "string", "enum": ["bullish", "bearish"]},
-                    "alert_type": {"type": "string"},
-                    "latest_per_ticker": {"type": "boolean", "default": False},
-                    "order": {"type": "string", "enum": ["asc", "desc"], "default": "desc"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 100},
-                    "cursor": {"type": "integer", "minimum": 0, "default": 0},
-                },
-                "required": [],
-            },
-        ),
+        *[
+            Tool(
+                name=name, description=_description(name),
+                inputSchema=documented_schema(name, _TOOL_DOCUMENTATION[name].arguments),
+            )
+            for name in STOCK_TOOL_SCHEMAS
+        ],
         Tool(
             name="get_recent_activities",
             description=_description("get_recent_activities"),
@@ -420,58 +409,8 @@ def _dispatch_with_connection(
             cursor=cursor,
         )
 
-    if name == "query_stock_alerts":
-        clauses, parameters = [], []
-        tickers = [str(item).strip().upper() for item in args.get("tickers", []) if str(item).strip()]
-        if tickers:
-            clauses.append(f"upper(ticker) IN ({', '.join('?' for _ in tickers)})")
-            parameters.extend(tickers)
-        if args.get("start_date"):
-            clauses.append("date >= ?")
-            parameters.append(args["start_date"])
-        if args.get("end_date"):
-            clauses.append("date <= ?")
-            parameters.append(args["end_date"])
-        if args.get("timeframe"):
-            clauses.append("alert_type LIKE ?")
-            parameters.append(f"supertrend_{args['timeframe']}_%")
-        if args.get("direction"):
-            clauses.append("alert_type LIKE ?")
-            parameters.append(f"%_{args['direction']}")
-        if args.get("alert_type"):
-            clauses.append("alert_type = ?")
-            parameters.append(args["alert_type"])
-        where = "WHERE " + " AND ".join(clauses) if clauses else ""
-        order = _order(args)
-        limit, cursor = _page(args)
-        if args.get("latest_per_ticker"):
-            query = f"""
-                SELECT id, date, ticker, alert_type, message, notified_at
-                FROM (
-                    SELECT id, date, ticker, alert_type, message, notified_at,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY ticker ORDER BY date DESC, notified_at DESC, id
-                           ) AS ticker_rank
-                    FROM stock_alerts
-                    {where}
-                ) ranked
-                WHERE ticker_rank = 1
-                ORDER BY date {order}, notified_at {order}, ticker
-            """
-        else:
-            query = f"""
-                SELECT id, date, ticker, alert_type, message, notified_at
-                FROM stock_alerts
-                {where}
-                ORDER BY date {order}, notified_at {order}, ticker
-            """
-        return _query_envelope(
-            con,
-            query,
-            parameters,
-            limit=limit,
-            cursor=cursor,
-        )
+    if name in STOCK_TOOL_SCHEMAS:
+        return json.dumps(dispatch_stock_tool(con, name, args), default=_json_default)
 
     if name == "get_recent_activities":
         df = con.execute(

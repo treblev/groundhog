@@ -20,6 +20,9 @@ from langchain.agents.middleware import (
 )
 from langchain_ollama import ChatOllama
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import StructuredTool
+from agent.stock_tools import STOCK_TOOL_SCHEMAS, documented_schema
+from mcp_server.tool_docs import load_tool_documentation
 from langchain.agents.middleware.types import hook_config
 from langgraph.types import Command
 from mcp import ClientSession
@@ -228,37 +231,10 @@ def _make_tools(session: ClientSession, allowed_names: set[str] | None = None) -
         result = await session.call_tool("query_stock_notes", arguments)
         return result.content[0].text if result.content else '{"rows":[],"count":0,"truncated":false,"next_cursor":null}'
 
-    async def query_stock_alerts(
-        tickers: list[str] | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        timeframe: str | None = None,
-        direction: str | None = None,
-        alert_type: str | None = None,
-        latest_per_ticker: bool = False,
-        order: str = "desc",
-        limit: int = 100,
-        cursor: int = 0,
-    ) -> str:
-        """List recorded stock alerts using exact structured filters."""
-        arguments = {
-            key: value
-            for key, value in {
-                "tickers": tickers,
-                "start_date": start_date,
-                "end_date": end_date,
-                "timeframe": timeframe,
-                "direction": direction,
-                "alert_type": alert_type,
-                "latest_per_ticker": latest_per_ticker,
-                "order": order,
-                "limit": limit,
-                "cursor": cursor,
-            }.items()
-            if value is not None
-        }
-        result = await session.call_tool("query_stock_alerts", arguments)
-        return result.content[0].text if result.content else '{"rows":[],"count":0,"truncated":false,"next_cursor":null}'
+    async def get_stock_symbols() -> str:
+        """Discover canonical ticker symbols actually stored across stock sources."""
+        result = await session.call_tool("get_stock_symbols", {})
+        return result.content[0].text if result.content else '{"rows":[]}'
 
     async def get_recent_activities(limit: int = 5) -> str:
         """Get recent Garmin activities."""
@@ -372,15 +348,28 @@ def _make_tools(session: ClientSession, allowed_names: set[str] | None = None) -
         result = await session.call_tool("recall", {"query": query, "top_k": top_k})
         return result.content[0].text if result.content else "Nothing found."
 
-    tools = [run_sql, get_latest_price, query_stock_notes, query_stock_alerts,
+    tools = [run_sql, get_latest_price, get_stock_symbols, query_stock_notes,
              get_recent_activities, get_activity_summary, get_sleep_summary,
              get_workout_for_date, search_documents, get_data_freshness, get_market_summary,
              get_health_summary, get_weekly_health_summary, get_weekly_market_summary,
              get_activity_progress,
              remember, recall]
+    documentation = load_tool_documentation()
+    def stock_caller(tool_name):
+        async def call_stock_tool(**arguments):
+            result = await session.call_tool(tool_name, arguments)
+            return result.content[0].text if result.content else '{"rows":[]}'
+        return call_stock_tool
+
+    for name in STOCK_TOOL_SCHEMAS:
+        tools.append(StructuredTool.from_function(
+            coroutine=stock_caller(name), name=name,
+            description=documentation[name].description,
+            args_schema=documented_schema(name, documentation[name].arguments),
+        ))
     if allowed_names is None:
         return tools
-    return [tool for tool in tools if tool.__name__ in allowed_names]
+    return [tool for tool in tools if (getattr(tool, "name", None) or tool.__name__) in allowed_names]
 
 
 def _resolve_search_domain(
@@ -618,6 +607,9 @@ Inspect a table with DESCRIBE only after selecting its relevant domain. Do not i
 """
 
 _LEGACY_TOOL_NAMES = {
+    *STOCK_TOOL_SCHEMAS,
+    "query_stock_notes",
+    "get_stock_symbols",
     "run_sql",
     "get_latest_price",
     "get_recent_activities",
@@ -642,10 +634,22 @@ class RoutedToolError(RuntimeError):
 
 def _fallback_system_prompt(features: RequestFeatures) -> str:
     domain = features.domain or "unresolved"
+    business_date = datetime.now(ZoneInfo(ASK_BUSINESS_TIMEZONE)).date().isoformat()
     return (
+        f"Today is {business_date} in {ASK_BUSINESS_TIMEZONE}. "
         "You are a personal data assistant with tools for a local database. "
         "Ground every factual claim in tool results from this request and do not guess. "
         "Call only the tools needed, stop when evidence is sufficient, and treat empty exact results as authoritative. "
+        "For stock research, choose the purpose-built stock tools and their arguments yourself. "
+        "Use period='2w' for the last two weeks, '3mo' for three months, etc.; let tools resolve relative dates. "
+        "Do not invent absolute dates or call freshness tools to guess today's date. "
+        "query_stock_alerts finds events; summarize_stock_alerts counts/groups them; query_stock_signals finds latest states or their history. "
+        "query_stock_prices reads bars; compare_stock_performance ranks price changes; get_stock_overview combines ticker context and notes; "
+        "get_stock_alert_outcomes measures post-alert price changes; get_stock_data_coverage explains missing data. "
+        "For lists of stocks that triggered an event, use latest_per_ticker=true; for current alignment use query_stock_signals require_all=true. "
+        "Use server totals for counts. Follow next_cursor until complete for all-results requests; never imply a truncated page is complete. "
+        "Use observation dates and resolved windows in answers. A stored buy/sell label is not a trading instruction. "
+        "Use run_sql only for analysis not supported by these tools. Fundamentals, news, live quotes, and broker holdings are unavailable. "
         "Use structured tools or SQL for exact filters, listings, counts, prices, and dates. "
         "Use search_documents only for meaning-based stock-note, workout, activity-progress, or summary retrieval. "
         "Use domain='summary' for past daily summaries and weekly reviews; verify exact numbers in structured records. "
@@ -657,20 +661,20 @@ def _fallback_system_prompt(features: RequestFeatures) -> str:
 
 def _fallback_tool_names(features: RequestFeatures) -> set[str]:
     by_domain = {
-        "stock_note": {"run_sql", "query_stock_notes", "search_documents"},
-        "stock_alert": {"run_sql", "query_stock_alerts", "search_documents"},
-        "stock_price": {"run_sql", "get_latest_price", "get_market_summary"},
         "workout": {"run_sql", "get_workout_for_date", "search_documents"},
         "weekly_health": {"get_weekly_health_summary"},
-        "weekly_market": {"get_weekly_market_summary"},
         "activity_progress": {"get_activity_progress", "search_documents"},
         "summary": {"run_sql", "search_documents"},
     }
+    if features.domain in {"stocks", "stock_note", "stock_alert", "stock_price", "weekly_market"}:
+        return {*STOCK_TOOL_SCHEMAS, "run_sql", "get_latest_price", "get_stock_symbols", "query_stock_notes", "search_documents", "get_market_summary", "get_weekly_market_summary"}
     if features.domain in by_domain:
         return by_domain[features.domain]
     return {
+        *STOCK_TOOL_SCHEMAS,
         "run_sql",
         "get_latest_price",
+        "get_stock_symbols",
         "query_stock_notes",
         "query_stock_alerts",
         "get_recent_activities",
@@ -693,30 +697,19 @@ def _result_text(result, empty: str = "No result.") -> str:
     return result.content[0].text if result.content else empty
 
 
-async def _runtime_stock_symbols(session: ClientSession) -> list[str]:
-    symbols = {ticker.upper() for ticker, _period in load_watchlist()}
-    try:
-        result = await _traced_setup_tool(session, "get_stock_symbols", {})
-        payload = json.loads(_result_text(result, '{"rows":[]}'))
-        symbols.update(
-            str(row["ticker"]).upper()
-            for row in payload.get("rows", [])
-            if row.get("ticker")
-        )
-    except Exception:
-        # The configured watchlist remains a safe canonical source if runtime
-        # discovery is temporarily unavailable.
-        pass
-    symbols.update(_STOCK_TICKER_ALIASES.values())
-    return sorted(symbols)
-
-
 async def _route_question(
     session: ClientSession, question: str
 ) -> tuple[RequestFeatures, RouteDecision | None, str | None]:
-    symbols = await _runtime_stock_symbols(session) if looks_like_stock_request(question) else []
+    # Stock tools are selected by the LLM. Local symbols are only a cheap domain hint;
+    # there is no mandatory database discovery or phrase-to-tool shortcut for stocks.
+    symbols = [ticker for ticker, _ in load_watchlist()]
+    symbols.extend(_STOCK_TICKER_ALIASES.values())
     reference_date = datetime.now(ZoneInfo(ASK_BUSINESS_TIMEZONE)).date()
     features = extract_features(question, symbols, _STOCK_TICKER_ALIASES, reference_date)
+    if features.domain in {"stock_note", "stock_alert", "stock_price", "weekly_market"} or (
+        features.domain is None and looks_like_stock_request(question)
+    ):
+        return RequestFeatures(domain="stocks"), None, "stock_tools_selected_by_model"
     match = select_route(features, question)
     return features, match.decision, match.fallback_reason
 

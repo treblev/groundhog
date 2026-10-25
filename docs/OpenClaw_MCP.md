@@ -74,6 +74,44 @@ tool unless the direct-command design is intentionally replaced. The
 
 ## Service Tool Contract
 
+Stock research uses a focused read-only tool set:
+
+| Tool | Purpose |
+| --- | --- |
+| `query_stock_alerts` | Recorded events; exact types, buy/sell direction, relative dates, latest matching event per ticker |
+| `summarize_stock_alerts` | Full counts and distinct tickers, grouped by ticker/type/direction/timeframe/day/week/month |
+| `query_stock_signals` | Latest stored or historical SMA/Supertrend observations, including indicator alignment |
+| `query_stock_prices` | Latest stored closes or historical OHLCV for one or many tickers |
+| `compare_stock_performance` | First-to-last observed close changes, rankings, ranges, volume |
+| `get_stock_overview` | Price, SMA50/200, current indicator observations, recent alerts, active notes |
+| `get_stock_alert_outcomes` | Forward price changes over stored sessions, with incomplete horizons explicit |
+| `get_stock_data_coverage` | Available sources, observed date coverage, and unsupported data categories |
+
+The LLM chooses stock tools rather than a phrase-matching dispatcher. Exact
+notes remain available through `query_stock_notes`, and meaning-based notes
+through `search_documents`. Existing `get_latest_price` and market-summary
+interfaces remain available. No indicator calculations or scheduling changed.
+
+Tools accept optional `period` (`2w`, `14d`, `3mo`, `1y`, `today`, `yesterday`,
+`this_week`, `last_week`, `this_month`, `last_month`, `ytd`, `all`) or explicit
+inclusive dates. Numeric periods include the reference day; two weeks means
+14 calendar dates. Weeks run Sunday–Saturday. `as_of` defaults to today in
+the configured business timezone and bounds available observations. Future
+reference dates, reversed ranges, and mixed relative/explicit windows are
+rejected. Omitted dates mean all prior history; performance defaults to `1mo`.
+
+Paged results include `rows`, page `count`, full `total_count`, `truncated`,
+`next_cursor`, `window`, source name, and latest available source date. Requests
+for all results must follow pagination. Aggregate totals cover all matching
+records. Events and latest indicator state are separate concepts: filtering a
+state by direction happens after selecting its most recent observation.
+
+Price comparisons describe stored close changes, not portfolio profit or
+dividend-adjusted total returns. Alert outcomes count stored sessions after
+the first bar on/after an event; no later than `as_of` is observed. Incomplete
+horizons never receive full-horizon returns. Snapshot notes are current active
+text; historical revisions are not reconstructed by `as_of`.
+
 | Tool | Input | Result | Ownership |
 | --- | --- | --- | --- |
 | `search_documents` | semantic query, domain, optional filters | JSON list of ranked semantic evidence | Groundhog refreshes its derived local index and reads canonical facts |
