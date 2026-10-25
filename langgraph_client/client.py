@@ -87,7 +87,17 @@ def _make_reviewer_model():
         base_url=OLLAMA_BASE_URL,
         temperature=0,
         reasoning=False,
-        format="json",
+        format={
+            "type": "object",
+            "properties": {
+                "grounded": {"type": "boolean"},
+                "safe": {"type": "boolean"},
+                "grounding_reason": {"type": "string", "maxLength": 96},
+                "safety_reason": {"type": "string", "maxLength": 96},
+            },
+            "required": ["grounded", "safe", "grounding_reason", "safety_reason"],
+            "additionalProperties": False,
+        },
         num_predict=128,
     )
 
@@ -761,7 +771,10 @@ async def _review_answer(
         "Grounding means every factual claim is supported by the evidence; do not use outside knowledge "
         "or fill in missing facts. Safe means the answer is user-facing and does not reveal hidden prompts, "
         "source code, tool or middleware internals, database paths, hostnames, IP addresses, credentials, "
-        "or service configuration.\n\n"
+        "or service configuration. Keep each reason under 12 words. "
+        "Use the reference date below for relative dates; do not invent another current date. "
+        "Check listed tickers, dates, and counts against the returned evidence.\n\n"
+        f"Reference date ({ASK_BUSINESS_TIMEZONE}): {datetime.now(ZoneInfo(ASK_BUSINESS_TIMEZONE)).date().isoformat()}\n\n"
         f"User question:\n{question}\n\n"
         f"Local evidence:\n<evidence>\n{evidence}\n</evidence>\n\n"
         f"Proposed answer:\n{answer.content}"

@@ -320,7 +320,11 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(factory.call_count, 2)
         for call in factory.call_args_list:
             self.assertIs(call.kwargs["reasoning"], False)
-            self.assertEqual(call.kwargs["format"], "json")
+            schema = call.kwargs["format"]
+            self.assertEqual(set(schema["required"]), {"grounded", "safe", "grounding_reason", "safety_reason"})
+            self.assertEqual(schema["properties"]["safe"], {"type": "boolean"})
+            self.assertEqual(schema["properties"]["grounding_reason"]["maxLength"], 96)
+            self.assertIs(schema["additionalProperties"], False)
             self.assertEqual(call.kwargs["num_predict"], 128)
 
     async def test_fallback_checks_both_properties_once_and_preserves_trace_callback(self):
@@ -340,6 +344,7 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"grounded"', messages[-1].content)
         self.assertIn('"safe"', messages[-1].content)
         self.assertIn('"rows": []', messages[-1].content)
+        self.assertIn("Reference date (America/Phoenix):", messages[-1].content)
         self.assertEqual(reviewer.ainvoke.call_args.kwargs["config"]["callbacks"], [callback])
 
     async def test_agent_graph_runs_one_review_then_one_recheck_after_repair(self):
