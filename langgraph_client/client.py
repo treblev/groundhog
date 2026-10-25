@@ -8,7 +8,7 @@ import json
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from langchain.agents import create_agent
@@ -754,6 +754,25 @@ async def _repair_routed_answer(
     )
 
 
+def _review_date_context(question: str, answer: str, reference_date: date) -> str:
+    """Give the reviewer deterministic bounds and membership for numeric lookbacks."""
+    lines = [f"Reference date ({ASK_BUSINESS_TIMEZONE}): {reference_date.isoformat()}"]
+    match = re.search(r"\b(?:last|past)\s+(\d{1,3})\s+(days?|weeks?)\b", question, re.IGNORECASE)
+    if match:
+        days = int(match.group(1)) * (7 if match.group(2).lower().startswith("week") else 1)
+        start = reference_date - timedelta(days=days)
+        lines.append(f"Requested date bounds, computed in Python (inclusive): {start} through {reference_date}.")
+        for value in sorted(set(re.findall(r"\b20\d{2}-\d{2}-\d{2}\b", answer))):
+            try:
+                within = start <= date.fromisoformat(value) <= reference_date
+                status = "IN RANGE" if within else "OUT OF RANGE"
+            except ValueError:
+                status = "INVALID DATE"
+            lines.append(f"Python date check for the answer: {value} = {status}.")
+        lines.append("Use these Python date checks as authoritative; do not redo the date arithmetic.")
+    return "\n".join(lines)
+
+
 async def _review_answer(
     reviewer_model,
     callback,
@@ -774,7 +793,7 @@ async def _review_answer(
         "or service configuration. Keep each reason under 12 words. "
         "Use the reference date below for relative dates; do not invent another current date. "
         "Check listed tickers, dates, and counts against the returned evidence.\n\n"
-        f"Reference date ({ASK_BUSINESS_TIMEZONE}): {datetime.now(ZoneInfo(ASK_BUSINESS_TIMEZONE)).date().isoformat()}\n\n"
+        f"{_review_date_context(question, str(answer.content), datetime.now(ZoneInfo(ASK_BUSINESS_TIMEZONE)).date())}\n\n"
         f"User question:\n{question}\n\n"
         f"Local evidence:\n<evidence>\n{evidence}\n</evidence>\n\n"
         f"Proposed answer:\n{answer.content}"

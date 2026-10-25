@@ -1,6 +1,7 @@
 import json
 import sys
 import unittest
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -16,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from langgraph_client.client import (
     AnswerReviewMiddleware,
     _make_reviewer_model,
+    _review_date_context,
     _ask_routed,
     _canonical_note_tickers,
     _fallback_system_prompt,
@@ -326,6 +328,24 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(schema["properties"]["grounding_reason"]["maxLength"], 96)
             self.assertIs(schema["additionalProperties"], False)
             self.assertEqual(call.kwargs["num_predict"], 128)
+
+    def test_review_date_checks_handle_rolling_window_and_boundaries_in_python(self):
+        context = _review_date_context(
+            "List records from the last 2 weeks", "2026-10-10 2026-10-11 2026-10-12 2026-10-25 2026-10-26",
+            date(2026, 10, 25),
+        )
+        self.assertIn("2026-10-11 through 2026-10-25", context)
+        for day in ("2026-10-11", "2026-10-12", "2026-10-25"):
+            self.assertIn(f"{day} = IN RANGE", context)
+        for day in ("2026-10-10", "2026-10-26"):
+            self.assertIn(f"{day} = OUT OF RANGE", context)
+
+    def test_review_date_context_supports_days_and_does_not_guess_other_windows(self):
+        context = _review_date_context("past 3 days", "2026-10-23 2026-13-23", date(2026, 10, 25))
+        self.assertIn("2026-10-22 through 2026-10-25", context)
+        self.assertIn("2026-13-23 = INVALID DATE", context)
+        context = _review_date_context("last month", "2026-10-23", date(2026, 10, 25))
+        self.assertNotIn("Requested date bounds", context)
 
     async def test_fallback_checks_both_properties_once_and_preserves_trace_callback(self):
         reviewer = SimpleNamespace(ainvoke=AsyncMock(return_value=AIMessage(content=(
