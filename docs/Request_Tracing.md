@@ -48,6 +48,12 @@ their error in the same combined record.
 The Python tracer is Groundhog-owned because `/ask`, activity processing, and
 media-queue processing runs outside OpenClaw's model lifecycle hooks.
 
+All `/ask` paths use one combined grounding/disclosure review per final answer.
+The reviewer disables reasoning and limits JSON output to 128 tokens. A failed
+review can produce an answer correction followed by one combined recheck;
+there are no separate grounding and disclosure LLM passes. Review calls remain
+ordinary `llm_call` spans, identifiable by the combined review system prompt.
+
 ## Inspection
 
 Show one request in chronological file order:

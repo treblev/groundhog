@@ -6,14 +6,16 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from langchain.agents.middleware import TodoListMiddleware, ToolCallLimitMiddleware, ToolRetryMiddleware
+from langchain.agents import create_agent
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from langgraph_client.client import (
-    DatabaseGroundingMiddleware,
-    InternalDetailsMiddleware,
+    AnswerReviewMiddleware,
+    _make_reviewer_model,
     _ask_routed,
     _canonical_note_tickers,
     _fallback_system_prompt,
@@ -162,8 +164,8 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(limits[0].run_limit, 12)
         self.assertEqual(limits[0].exit_behavior, "continue")
         self.assertTrue(any(isinstance(item, TodoListMiddleware) for item in middleware))
-        self.assertTrue(any(isinstance(item, DatabaseGroundingMiddleware) for item in middleware))
-        self.assertTrue(any(isinstance(item, InternalDetailsMiddleware) for item in middleware))
+        self.assertEqual(sum(isinstance(item, AnswerReviewMiddleware) for item in middleware), 1)
+        self.assertEqual(len(middleware), 4)
 
     def test_routed_middleware_excludes_todo_planner(self):
         middleware = _make_middleware(include_todos=False)
@@ -277,7 +279,7 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
         ])
 
     def test_grounding_guard_includes_prefetched_note_evidence(self):
-        guard = DatabaseGroundingMiddleware(prefetched_evidence="BKNG: bought 4 shares")
+        guard = AnswerReviewMiddleware(prefetched_evidence="BKNG: bought 4 shares")
         self.assertEqual(guard._tool_evidence([]), "BKNG: bought 4 shares")
 
     async def test_routed_guards_use_one_combined_reviewer_on_success(self):
@@ -308,6 +310,102 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.content, answer.content)
         self.assertEqual(reviewer.calls, 1)
+
+    def test_all_reviewers_disable_thinking_and_bound_json_output(self):
+        with patch("langgraph_client.client.ChatOllama") as factory:
+            reviewer = _make_reviewer_model()
+            guard = AnswerReviewMiddleware()
+        self.assertIs(reviewer, factory.return_value)
+        self.assertIs(guard.verifier_model, reviewer)
+        self.assertEqual(factory.call_count, 2)
+        for call in factory.call_args_list:
+            self.assertIs(call.kwargs["reasoning"], False)
+            self.assertEqual(call.kwargs["format"], "json")
+            self.assertEqual(call.kwargs["num_predict"], 128)
+
+    async def test_fallback_checks_both_properties_once_and_preserves_trace_callback(self):
+        reviewer = SimpleNamespace(ainvoke=AsyncMock(return_value=AIMessage(content=(
+            '{"grounded": true, "safe": true, "grounding_reason": "Matches.", "safety_reason": "User-facing."}'
+        ))))
+        callback = object()
+        guard = AnswerReviewMiddleware(verifier_model=reviewer, trace_callback=callback)
+        update = await guard.aafter_model({"messages": [
+            HumanMessage(content="List recorded alerts"),
+            ToolMessage(content='{"rows": [], "count": 0}', tool_call_id="alerts"),
+            AIMessage(content="No recorded alerts."),
+        ]}, runtime=None)
+        self.assertIsNone(update)
+        reviewer.ainvoke.assert_awaited_once()
+        messages = reviewer.ainvoke.call_args.args[0]
+        self.assertIn('"grounded"', messages[-1].content)
+        self.assertIn('"safe"', messages[-1].content)
+        self.assertIn('"rows": []', messages[-1].content)
+        self.assertEqual(reviewer.ainvoke.call_args.kwargs["config"]["callbacks"], [callback])
+
+    async def test_agent_graph_runs_one_review_then_one_recheck_after_repair(self):
+        reviewer = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
+            AIMessage(content='{"grounded": false, "safe": true, "grounding_reason": "No such recorded alert."}'),
+            AIMessage(content='{"grounded": true, "safe": true}'),
+        ]))
+        model = FakeMessagesListChatModel(responses=[
+            AIMessage(content="There was an alert."), AIMessage(content="No alert was recorded."),
+        ])
+        with patch("langgraph_client.client._make_reviewer_model", return_value=reviewer):
+            agent = create_agent(model=model, middleware=_make_middleware(
+                prefetched_evidence='{"rows": [], "count": 0}', include_todos=False,
+            ))
+            result = await agent.ainvoke({"messages": [HumanMessage(content="Were any alerts recorded?")]})
+        self.assertEqual(result["messages"][-1].content, "No alert was recorded.")
+        self.assertEqual(reviewer.ainvoke.await_count, 2)
+        self.assertEqual(sum(isinstance(m, AIMessage) for m in result["messages"]), 2)
+
+    async def test_fallback_skips_review_during_tool_selection(self):
+        reviewer = SimpleNamespace(ainvoke=AsyncMock())
+        guard = AnswerReviewMiddleware(verifier_model=reviewer)
+        result = await guard.aafter_model({"messages": [
+            HumanMessage(content="List alerts"),
+            AIMessage(content="", tool_calls=[{"name": "query_stock_alerts", "args": {}, "id": "alerts"}]),
+        ]}, runtime=None)
+        self.assertIsNone(result)
+        reviewer.ainvoke.assert_not_awaited()
+
+    async def test_fallback_malformed_review_or_model_error_requests_repair_then_declines(self):
+        for response in ("not json", '{"grounded": true}', '{"grounded": "true", "safe": true}', RuntimeError("offline")):
+            with self.subTest(response=response):
+                invoke = AsyncMock(side_effect=response) if isinstance(response, Exception) else AsyncMock(return_value=AIMessage(content=response))
+                guard = AnswerReviewMiddleware(verifier_model=SimpleNamespace(ainvoke=invoke))
+                messages = [HumanMessage(content="List alerts"), ToolMessage(content='{"rows": []}', tool_call_id="alerts"), AIMessage(content="No alerts.")]
+                first = await guard.aafter_model({"messages": messages}, runtime=None)
+                self.assertIsInstance(first, Command)
+                second = await guard.aafter_model({"messages": messages[:-1] + first.update["messages"] + [AIMessage(content="Still no alerts.")]}, runtime=None)
+                self.assertEqual(second["messages"][0].content, guard._GROUNDING_DECLINE_MESSAGE)
+                self.assertEqual(invoke.await_count, 2)
+
+    async def test_fallback_has_one_repair_budget_for_both_checks(self):
+        reviewer = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
+            AIMessage(content='{"grounded": false, "safe": true, "grounding_reason": "Unsupported."}'),
+            AIMessage(content='{"grounded": true, "safe": false, "safety_reason": "Internal details."}'),
+        ]))
+        guard = AnswerReviewMiddleware(verifier_model=reviewer)
+        messages = [HumanMessage(content="List alerts"), ToolMessage(content='{"rows": []}', tool_call_id="alerts"), AIMessage(content="Unsupported answer.")]
+        first = await guard.aafter_model({"messages": messages}, runtime=None)
+        second = await guard.aafter_model({"messages": messages[:-1] + first.update["messages"] + [AIMessage(content="Corrected but internal.")]}, runtime=None)
+        self.assertEqual(second["messages"][0].content, guard._DISCLOSURE_DECLINE_MESSAGE)
+        self.assertEqual(reviewer.ainvoke.await_count, 2)
+
+    async def test_fallback_accepts_repaired_answer_after_one_shared_recheck(self):
+        reviewer = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
+            AIMessage(content='{"grounded": false, "safe": false, "grounding_reason": "Unsupported.", "safety_reason": "Internal."}'),
+            AIMessage(content='{"grounded": true, "safe": true}'),
+        ]))
+        guard = AnswerReviewMiddleware(verifier_model=reviewer)
+        messages = [HumanMessage(content="List alerts"), ToolMessage(content='{"rows": []}', tool_call_id="alerts"), AIMessage(content="Unsupported internal answer.")]
+        first = await guard.aafter_model({"messages": messages}, runtime=None)
+        self.assertIn("grounding: Unsupported.", first.update["messages"][0].content)
+        self.assertIn("disclosure: Internal.", first.update["messages"][0].content)
+        second = await guard.aafter_model({"messages": messages[:-1] + first.update["messages"] + [AIMessage(content="No alerts.")]}, runtime=None)
+        self.assertIsNone(second)
+        self.assertEqual(reviewer.ainvoke.await_count, 2)
 
     async def test_routed_guards_repair_then_recheck_with_combined_reviewer(self):
         class Reviewer:
@@ -350,7 +448,7 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer_model.calls, 1)
 
     async def test_grounding_guard_requests_a_corrective_retry_without_tool_result(self):
-        guard = DatabaseGroundingMiddleware()
+        guard = AnswerReviewMiddleware()
         update = await guard.aafter_model(
             {"messages": [HumanMessage(content="What was my latest resting heart rate?"), AIMessage(content="54 bpm")]},
             runtime=None,
@@ -361,7 +459,7 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(guard._CORRECTION_MARKER, update.update["messages"][0].content)
 
     async def test_grounding_guard_declines_after_one_failed_retry(self):
-        guard = DatabaseGroundingMiddleware()
+        guard = AnswerReviewMiddleware()
         update = await guard.aafter_model(
             {
                 "messages": [
@@ -373,14 +471,14 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
             runtime=None,
         )
 
-        self.assertEqual(update["messages"][0].content, guard._DECLINE_MESSAGE)
+        self.assertEqual(update["messages"][0].content, guard._GROUNDING_DECLINE_MESSAGE)
 
     async def test_grounding_guard_allows_verifier_approved_answer(self):
         class ApprovedVerifier:
             async def ainvoke(self, messages):
-                return AIMessage(content='{"grounded": true, "reason": "The result states 54."}')
+                return AIMessage(content='{"grounded": true, "safe": true, "grounding_reason": "The result states 54.", "safety_reason": "User-facing."}')
 
-        guard = DatabaseGroundingMiddleware(verifier_model=ApprovedVerifier())
+        guard = AnswerReviewMiddleware(verifier_model=ApprovedVerifier())
         update = await guard.aafter_model(
             {
                 "messages": [
@@ -397,13 +495,14 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_internal_details_guard_requests_a_safe_rewrite(self):
         class UnsafeVerifier:
             async def ainvoke(self, messages):
-                return AIMessage(content='{"safe": false, "reason": "It exposes an internal path."}')
+                return AIMessage(content='{"grounded": true, "safe": false, "safety_reason": "It exposes an internal path."}')
 
-        guard = InternalDetailsMiddleware(verifier_model=UnsafeVerifier())
+        guard = AnswerReviewMiddleware(verifier_model=UnsafeVerifier())
         update = await guard.aafter_model(
             {
                 "messages": [
                     HumanMessage(content="Where is my latest activity?"),
+                    ToolMessage(content="Activity was imported.", tool_call_id="activity-1"),
                     AIMessage(content="It is stored in an internal database path."),
                 ]
             },
@@ -417,21 +516,22 @@ class LangGraphClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_internal_details_guard_declines_after_failed_rewrite(self):
         class UnsafeVerifier:
             async def ainvoke(self, messages):
-                return AIMessage(content='{"safe": false, "reason": "Still internal."}')
+                return AIMessage(content='{"grounded": true, "safe": false, "safety_reason": "Still internal."}')
 
-        guard = InternalDetailsMiddleware(verifier_model=UnsafeVerifier())
+        guard = AnswerReviewMiddleware(verifier_model=UnsafeVerifier())
         update = await guard.aafter_model(
             {
                 "messages": [
                     HumanMessage(content="Where is my latest activity?"),
                     HumanMessage(content=f"{guard._CORRECTION_MARKER} rewrite safely"),
+                    ToolMessage(content="Activity was imported.", tool_call_id="activity-1"),
                     AIMessage(content="It is stored in an internal database path."),
                 ]
             },
             runtime=None,
         )
 
-        self.assertEqual(update["messages"][0].content, guard._DECLINE_MESSAGE)
+        self.assertEqual(update["messages"][0].content, guard._DISCLOSURE_DECLINE_MESSAGE)
 
 
 if __name__ == "__main__":
