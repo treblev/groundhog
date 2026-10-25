@@ -167,6 +167,14 @@ class StockToolTests(unittest.TestCase):
         r = self.call("query_stock_prices", tickers=["TEST"], mode="history", as_of="2026-10-21")
         self.assertEqual(len(r["rows"]), 2)
 
+    def test_signal_stock_count_is_distinct_and_independent_of_page_size(self):
+        r = self.call("query_stock_signals", signal_type="supertrend", direction="bullish", require_all=True, limit=1)
+        self.assertEqual(r["ticker_count"], 1)
+        self.assertEqual(r["total_count"], 2)
+        self.assertEqual(r["count"], 1)
+        self.assertTrue(r["truncated"])
+        self.assertNotIn("created_at", r["rows"][0])
+
     def test_performance_returns_rank_missing_data_and_zero_baseline(self):
         r = self.call("compare_stock_performance", tickers=["TEST", "DOWN", "SINGLE", "ZERO", "MISSING"], period="2w")
         by_ticker = {row["ticker"]: row for row in r["rows"]}

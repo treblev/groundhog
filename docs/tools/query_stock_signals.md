@@ -1,6 +1,6 @@
 # `query_stock_signals`
 
-Read CURRENT/latest stored SMA and Supertrend indicator states, or their historical observations. Use this for which stocks ARE bullish/bearish now, as distinct from which stocks TRIGGERED alerts. Latest mode chooses the newest state before applying direction filters, so old bearish observations cannot masquerade as current states. require_all screens for indicator alignment. Values and observation dates are explicit; stored state may be stale. Defaults: latest mode as of today.
+Read CURRENT/latest stored SMA and Supertrend indicator states, or their historical observations. Use this for which stocks ARE bullish/bearish now, as distinct from which stocks TRIGGERED alerts. Latest mode chooses the newest state before applying direction filters, so old bearish observations cannot masquerade as current states. require_all screens for indicator alignment using each combination's own latest observation; dates can differ. Disclose stale dates rather than silently dropping qualifying stocks. ticker_count is the distinct matching stock count across all pages; total_count counts indicator rows. Values and observation dates are explicit. Defaults: latest mode as of today.
 
 ## Arguments
 

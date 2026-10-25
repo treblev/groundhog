@@ -221,10 +221,17 @@ def query_stock_signals(con, args):
             raise ValueError("No supported signal/timeframe combination requested")
         query = f"SELECT * FROM ({query}) signals QUALIFY COUNT(*) OVER (PARTITION BY ticker) = ?"
         params.append(len(combinations))
-    result = _envelope(con, f"{query} ORDER BY date {_order(args)}, ticker, signal_type, timeframe, id", params, args, window, "stock_signals")
+    result = _envelope(con, f"SELECT id, date, ticker, signal_type, timeframe, value, direction FROM ({query}) signals ORDER BY date {_order(args)}, ticker, signal_type, timeframe, id", params, args, window, "stock_signals")
+    result["ticker_count"] = con.execute(f"SELECT COUNT(DISTINCT ticker) FROM ({query}) signals", params).fetchone()[0]
     result["mode"] = mode
     result["value_meaning"] = {"sma_cross": "SMA50 minus SMA200", "supertrend": "Supertrend line price"}
-    result["interpretation"] = "Latest stored indicator states are not new crossover events; use alert history for transitions."
+    result["interpretation"] = (
+        "Latest means the newest available observation per ticker/indicator/timeframe, not necessarily today's date. "
+        "Observation dates may differ; report stale dates rather than silently discarding qualifying rows. "
+        "require_all checks every selected combination at its own latest observation. "
+        "ticker_count counts distinct matching stocks across all pages; total_count counts indicator rows. "
+        "States are not new crossover events; use alert history for transitions."
+    )
     return result
 
 
