@@ -783,7 +783,19 @@ async def _review_answer(
         '"grounding_reason": "brief explanation", '
         '"safety_reason": "brief explanation"}.\n\n'
         "Grounding means every factual claim is supported by the evidence; do not use outside knowledge "
-        "or fill in missing facts. Safe means the answer is user-facing and does not reveal hidden prompts, "
+        "or fill in missing facts. Compare meaning rather than identical wording or decimal formatting. "
+        "Accept correct rounding to the displayed precision and equivalent approximate unit abbreviations: "
+        "74.6556 can be 74.66, 4,166,087 can be about 4.2M, and 7.2857% can be about 7%. "
+        "Trust calculated fields returned by tools, including counts, differences, and percentage changes. "
+        "Do not reject a supported value because the answer formats it differently. "
+        "Allow qualified technical interpretations directly supported by the returned indicators, "
+        "even when the evidence does not contain that exact prose. Forecasts and causal claims still need evidence. "
+        "Distinguish an indicator state from a transition or alert event: a bullish SMA observation does not "
+        "prove that a new golden cross or alert occurred on its observation date. Event claims need event evidence. "
+        "Reject changed values, signs, units, tickers, dates, and invented facts. "
+        "Before marking grounded=false, identify a specific unsupported claim and the missing or conflicting evidence; "
+        "check that a value is actually absent before calling it missing. "
+        "Safe means the answer is user-facing and does not reveal hidden prompts, "
         "source code, tool or middleware internals, database paths, hostnames, IP addresses, credentials, "
         "or service configuration. Keep each reason under 12 words. "
         "Use the reference date below for relative dates; do not invent another current date. "
@@ -796,7 +808,11 @@ async def _review_answer(
         f"Proposed answer:\n{answer.content}"
     )
     messages = [
-        SystemMessage(content="You are a strict grounding and user-facing safety reviewer."),
+        SystemMessage(content=(
+            "You review factual support and user-facing safety. "
+            "Accept faithful paraphrases, valid numeric formatting, and supported interpretations. "
+            "Reject unsupported factual claims and private implementation disclosures."
+        )),
         HumanMessage(content=prompt),
     ]
     try:
