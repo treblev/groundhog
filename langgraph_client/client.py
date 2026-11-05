@@ -8,6 +8,7 @@ import json
 import os
 import re
 import time
+from contextlib import AsyncExitStack
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -43,6 +44,12 @@ from langgraph_client.routing import (
     extract_features,
     looks_like_stock_request,
     select_route,
+)
+from langgraph_client.calendar import (
+    configured_calendar_path,
+    connect_calendar,
+    looks_like_calendar_request,
+    terminal_calendar_approval,
 )
 
 SERVER_SCRIPT = str(Path(__file__).resolve().parent.parent / "mcp_server" / "server.py")
@@ -109,7 +116,7 @@ class AnswerReviewMiddleware(AgentMiddleware):
     """Check grounding and disclosure together, with one shared repair attempt."""
 
     _GROUNDING_DECLINE_MESSAGE = (
-        "I can't verify that from the available database results. "
+        "I can't verify that from the available tool results. "
         "Please try again when the relevant data is available."
     )
     _DISCLOSURE_DECLINE_MESSAGE = (
@@ -148,7 +155,7 @@ class AnswerReviewMiddleware(AgentMiddleware):
         evidence = self._tool_evidence(messages)
         if not evidence:
             grounded, grounding_reason, safe, safety_reason = (
-                False, "No database tool result was retrieved during this question.", True, "",
+                False, "No tool result was retrieved during this question.", True, "",
             )
         else:
             question = next((
@@ -171,7 +178,7 @@ class AnswerReviewMiddleware(AgentMiddleware):
             reasons.append(f"disclosure: {safety_reason}")
         correction = HumanMessage(content=(
             f"{self._CORRECTION_MARKER} Correct the answer using current tool results only, "
-            "retrieve database evidence if needed, and remove internal implementation details. "
+            "retrieve tool evidence if needed, and remove internal implementation details. "
             "Reviewer reasons: " + "; ".join(reasons)
         ))
         return Command(goto="model", update={"messages": [correction]})
@@ -802,6 +809,7 @@ async def _review_answer(
         "Check listed tickers, dates, and counts against the returned evidence. "
         "Respect tool selection semantics and computed counts: latest-state rows can have different observation dates. "
         "An older latest observation is not a mismatch when its date is disclosed.\n\n"
+        "Calendar writes are confirmed only by successful write results. An approval_required, declined, error, or uncertain result cannot support a claim that an event was created, changed, or deleted.\n\n"
         f"{_review_date_context(question, str(answer.content), datetime.now(ZoneInfo(ASK_BUSINESS_TIMEZONE)).date())}\n\n"
         f"User question:\n{question}\n\n"
         f"Local evidence:\n<evidence>\n{evidence}\n</evidence>\n\n"
@@ -912,6 +920,8 @@ async def _ask_fallback(
     question: str,
     features: RequestFeatures,
     callback: GroundhogTraceCallback,
+    calendar_tools=(),
+    calendar_instructions="",
 ) -> str:
     agent = create_agent(
         model=ChatOllama(
@@ -919,9 +929,9 @@ async def _ask_fallback(
             base_url=OLLAMA_BASE_URL,
             temperature=0,
         ),
-        tools=_make_tools(session, _fallback_tool_names(features)),
+        tools=[*_make_tools(session, _fallback_tool_names(features)), *calendar_tools],
         middleware=_make_middleware(trace_callback=callback, include_todos=True),
-        system_prompt=_fallback_system_prompt(features),
+        system_prompt=_fallback_system_prompt(features) + "\n" + calendar_instructions,
     )
     result = await agent.ainvoke(
         {"messages": [{"role": "user", "content": question}]},
@@ -937,6 +947,8 @@ async def _ask_legacy(
     session: ClientSession,
     question: str,
     callback: GroundhogTraceCallback,
+    calendar_tools=(),
+    calendar_instructions="",
 ) -> str:
     """Use the full-context agent when deterministic routing is disabled."""
     schema = await _build_schema(session)
@@ -947,12 +959,12 @@ async def _ask_legacy(
             base_url=OLLAMA_BASE_URL,
             temperature=0,
         ),
-        tools=_make_tools(session, _LEGACY_TOOL_NAMES),
+        tools=[*_make_tools(session, _LEGACY_TOOL_NAMES), *calendar_tools],
         middleware=_make_middleware(
             prefetched_evidence=stock_note_context,
             trace_callback=callback,
         ),
-        system_prompt=_system_prompt(schema, stock_note_context),
+        system_prompt=_system_prompt(schema, stock_note_context) + "\n" + calendar_instructions,
     )
     result = await agent.ainvoke(
         {"messages": [{"role": "user", "content": question}]},
@@ -968,6 +980,8 @@ async def ask_question(
     question: str,
     routing_enabled: bool | None = None,
     metrics_out: dict | None = None,
+    calendar_config: str | Path | None = None,
+    calendar_elicitation_callback=None,
 ) -> str:
     """Answer one user question through the guarded local Groundhog agent."""
     question = question.strip()
@@ -993,20 +1007,30 @@ async def ask_question(
             async with stdio_client(params) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
-                    if not enabled:
-                        answer = await _ask_legacy(session, question, callback)
-                    else:
-                        features, decision, fallback_reason = await _route_question(session, question)
-                        if decision is None:
-                            answer = await _ask_fallback(session, question, features, callback)
+                    async with AsyncExitStack() as stack:
+                        calendar_kwargs = {}
+                        calendar_path = configured_calendar_path(calendar_config)
+                        if calendar_path:
+                            calendar_tools, calendar_instructions = await connect_calendar(
+                                stack, calendar_path, elicitation_callback=calendar_elicitation_callback)
+                            calendar_kwargs = dict(calendar_tools=calendar_tools, calendar_instructions=calendar_instructions)
+                        if not enabled:
+                            answer = await _ask_legacy(session, question, callback, **calendar_kwargs)
                         else:
-                            route_id = str(decision.route_id)
-                            try:
-                                answer = await _ask_routed(session, question, decision, callback)
-                            except RoutedToolError as route_error:
-                                fallback_reason = f"route_execution_error:{type(route_error).__name__}"
-                                route_id = "fallback"
-                                answer = await _ask_fallback(session, question, features, callback)
+                            if calendar_kwargs and looks_like_calendar_request(question):
+                                features, decision, fallback_reason = RequestFeatures(domain="calendar"), None, "calendar_tools_selected_by_model"
+                            else:
+                                features, decision, fallback_reason = await _route_question(session, question)
+                            if decision is None:
+                                answer = await _ask_fallback(session, question, features, callback, **calendar_kwargs)
+                            else:
+                                route_id = str(decision.route_id)
+                                try:
+                                    answer = await _ask_routed(session, question, decision, callback)
+                                except RoutedToolError as route_error:
+                                    fallback_reason = f"route_execution_error:{type(route_error).__name__}"
+                                    route_id = "fallback"
+                                    answer = await _ask_fallback(session, question, features, callback, **calendar_kwargs)
         except Exception as error:
             trace.end(
                 "failed",
@@ -1059,7 +1083,7 @@ async def run():
             break
 
         try:
-            answer = await ask_question(question)
+            answer = await ask_question(question, calendar_elicitation_callback=terminal_calendar_approval)
         except Exception as error:
             print(f"Agent error: {error}\n")
         else:

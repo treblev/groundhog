@@ -17,6 +17,58 @@ calls record the local path and the enclosing activity request records its
 content hash. Prompt and response text, tool arguments and results, errors,
 models, start times, and durations are retained locally.
 
+## Live lifecycle in OpenClaw
+
+The OpenClaw trace plugin also emits metadata-only lifecycle summaries through
+`api.logger`. In the dashboard, open the avatar/name menu at the bottom-left,
+then **Settings → System → Logs**. Enable **Auto-follow** and filter for
+`groundhog-trace`.
+
+Events include `message_received`, `request_started`, `model_started`,
+`context_ready`, `model_finished`, `tool_started`, `tool_finished`,
+`request_finished`, and `message_sent`. `trace_ready` confirms that the plugin
+loaded. `observer_error` reports a tracing failure without blocking the agent.
+
+Use `run_id` to follow an agent turn. `session_ref` and `message_ref` are hashed
+references for correlation without exposing channel identities. Inbound events
+may arrive before a run ID is assigned; unavailable fields are omitted rather
+than guessed. Delivery outcomes are separate from agent completion and do not
+prove that the recipient read the message.
+
+Summaries contain stage names, identifiers, model/tool names, durations, status,
+and context-size counts. They exclude prompts, replies, tool arguments/results,
+raw error messages, and credentials. The detailed private JSONL contract below
+is unchanged. `model_finished` is emitted when the model call ends, even if the
+agent's final response has not arrived. A long model call does not produce token
+progress here; Ollama's own server log reports prompt-processing progress.
+
+Run the offline plugin tests with:
+
+```bash
+node --test deploy/openclaw/plugins/groundhog-request-trace/core.test.js
+```
+
+## Local-model context policy
+
+Telegram's channel-scoped DM sessions use `channels.telegram.dmHistoryLimit: 1`.
+This bounds model replay to roughly one or two recent user turns, including
+their assistant/tool messages; OpenClaw evicts turns in batches. It does not
+erase stored transcripts. A value of zero means no session-turn trimming.
+
+The configured `qwen3.8:27b-mlx` provider-model entry uses
+`contextTokens: 32768` as its practical input budget. Its native
+`contextWindow: 262144` remains unchanged. Merge the budget into that existing
+model entry rather than replacing the provider's model list. The installed
+runtime bounds its normal compaction reserve to a quarter of the budget, so
+token-pressure maintenance starts earlier under the smaller budget.
+
+Apply these controls before testing the same channel session again. Refresh an
+oversized session through the supported `sessions.reset` Gateway operation when
+a clean context is desired. Verify actual model input size and MCP tool usage;
+a fresh headless test alone does not establish Telegram performance. Scheduled
+jobs and the Groundhog data MCP interface are independent of this channel replay
+setting.
+
 ## Record contract
 
 Every request is ordered by one `request_id`:

@@ -1,7 +1,7 @@
 {
   "id": "groundhog-request-trace",
   "name": "Groundhog request trace",
-  "description": "Writes local JSONL request, LLM-call, and tool-call spans for every OpenClaw agent run.",
+  "description": "Private JSONL request traces and content-free lifecycle summaries in Gateway logs.",
   "activation": { "onStartup": true, "onConfigPaths": ["plugins.entries.groundhog-request-trace"] },
   "configSchema": {
     "type": "object",
