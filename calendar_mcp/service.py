@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from calendar_mcp.audit import AuditLog
 from calendar_mcp.provider import open_provider
-from integrations.icloud_calendar import CalendarError, event_fields, temporal
+from integrations.icloud_calendar import CalendarError, event_fields, temporal, read_window
 
 
 def event_id(url):
@@ -30,6 +30,13 @@ def public_event(row, *, include_description=False):
     result["event_id"] = event_id(row["event_url"])
     if include_description:
         result["description"] = row.get("description", "")
+    return result
+
+
+def public_reminder(row):
+    result = {k: row[k] for k in ("uid", "summary", "start", "due", "scheduled_at", "schedule_basis",
+                                  "all_day", "status", "priority", "recurrence_id", "recurring", "list_name") if k in row}
+    result["reminder_id"] = event_id(row["event_url"])
     return result
 
 
@@ -56,8 +63,18 @@ class CalendarService:
                     "calendar_id": configured[row["calendar_url"]].id if row["calendar_url"] in configured
                         else "unselected-" + hashlib.sha256(row["calendar_url"].encode()).hexdigest()[:16],
                     "name": row["name"], "read_enabled": row["calendar_url"] in configured,
-                    "write_enabled": bool(configured.get(row["calendar_url"]) and configured[row["calendar_url"]].writable),
+                    "supported_components": row["supported_components"],
+                    "write_enabled": bool(configured.get(row["calendar_url"]) and configured[row["calendar_url"]].writable
+                                          and "VEVENT" in row["supported_components"]),
+                    "reminder_write_enabled": False,
                 } for row in discovered], "timezone": self.settings.timezone}
+            if operation == "calendar_agenda":
+                return self._agenda(provider, **args)
+            if operation == "calendar_reminders":
+                result = provider.reminders(**self._arguments(args))
+                return {"calendar_id": args["calendar_id"], "timezone": result["timezone"],
+                        "reminders": [public_reminder(row) for row in result["reminders"]],
+                        **{k: result[k] for k in ("window", "scope", "total_count", "truncated")}}
             if operation == "calendar_events":
                 result = provider.agenda(**self._arguments(args))
                 return {"calendar_id": args["calendar_id"], "timezone": result["timezone"],
@@ -72,6 +89,51 @@ class CalendarService:
                 return self._availability(provider, **args)
         raise CalendarError("Unsupported calendar read operation.")
 
+    def _agenda(self, provider, *, start, end, calendar_ids=None, limit=100):
+        read_window(start, end, limit)
+        selected = list(dict.fromkeys(calendar_ids if calendar_ids is not None else [c.id for c in self.settings.calendars]))
+        if not selected:
+            raise CalendarError("Select at least one readable collection before requesting an agenda.")
+        # Validate all requested IDs before querying any collection.
+        calendars = [self.settings.calendar(value) for value in selected]
+        events, reminders, sources = [], [], []
+        event_count = reminder_count = 0
+        truncated = False
+        for calendar in calendars:
+            components = provider.supported_components(calendar_url=calendar.url)
+            source = {"calendar_id": calendar.id, "supported_components": components,
+                      "events_checked": "VEVENT" in components, "reminders_checked": "VTODO" in components}
+            arguments = dict(calendar_url=calendar.url, start=start, end=end, limit=500)
+            if source["events_checked"]:
+                result = provider.agenda(**arguments)
+                events.extend({"calendar_id": calendar.id, **public_event(row)} for row in result["events"])
+                event_count += result["total_count"]
+                truncated |= result["truncated"]
+                source["event_count"] = result["total_count"]
+            if source["reminders_checked"]:
+                result = provider.reminders(**arguments)
+                reminders.extend({"calendar_id": calendar.id, **public_reminder(row)} for row in result["reminders"])
+                reminder_count += result["total_count"]
+                truncated |= result["truncated"]
+                source["reminder_count"] = result["total_count"]
+                source["reminder_scope"] = result.get("scope", "")
+                source["reminder_source"] = result.get("source", "iCloud CalDAV")
+            sources.append(source)
+        zone = ZoneInfo(self.settings.timezone)
+        def instant(value):
+            parsed = datetime.fromisoformat(value)
+            return (parsed.replace(tzinfo=zone) if parsed.tzinfo is None else parsed).astimezone(timezone.utc)
+        events.sort(key=lambda row: (instant(row["start"]), row["calendar_id"], row.get("uid", "")))
+        reminders.sort(key=lambda row: (instant(row["scheduled_at"]), row["calendar_id"], row.get("uid", "")))
+        return {"events": events[:limit], "reminders": reminders[:limit],
+                "event_count": event_count, "reminder_count": reminder_count,
+                "events_checked": any(row["events_checked"] for row in sources),
+                "reminders_checked": any(row["reminders_checked"] for row in sources),
+                "sources": sources, "timezone": self.settings.timezone,
+                "window": {"start": start, "end": end, "end_exclusive": True},
+                "truncated": bool(truncated or len(events) > limit or len(reminders) > limit),
+                "reminder_scope": "Unfinished tasks with DUE (or DTSTART when no due date exists) inside the window. Undated tasks and tasks scheduled outside the window are not included. Reminder tasks are read-only and do not reserve time."}
+
     def _availability(self, provider, *, start, end, duration_minutes, calendar_ids=None, limit=50):
         start_dt, end_dt = temporal(start, all_day=False), temporal(end, all_day=False)
         if not timedelta(0) < end_dt - start_dt <= timedelta(days=31):
@@ -85,8 +147,12 @@ class CalendarService:
             raise CalendarError("Select at least one readable calendar before checking availability.")
         zone = ZoneInfo(self.settings.timezone)
         busy = []
+        checked = []
         for selected_id in selected:
             calendar = self.settings.calendar(selected_id)
+            if "VEVENT" not in provider.supported_components(calendar_url=calendar.url):
+                continue
+            checked.append(selected_id)
             agenda = provider.agenda(calendar_url=calendar.url, start=start, end=end, limit=500)
             if agenda["truncated"]:
                 raise CalendarError("The busy-event window is truncated. Narrow the time window before finding free slots.")
@@ -100,6 +166,8 @@ class CalendarService:
                 left, right = max(start_dt, instant(event["start"])), min(end_dt, instant(event["end"]))
                 if right > left:
                     busy.append((left, right))
+        if not checked:
+            raise CalendarError("No selected collection supports calendar events; meeting availability could not be checked.")
         cursor = start_dt
         free = []
         duration = timedelta(minutes=duration_minutes)
@@ -110,7 +178,8 @@ class CalendarService:
                              "available_until": left.astimezone(zone).isoformat()})
             cursor = max(cursor, right)
         return {"slots": free[:limit], "total_count": len(free), "truncated": len(free) > limit,
-                "calendar_ids": selected, "timezone": self.settings.timezone,
+                "calendar_ids": checked, "excluded_task_collection_ids": [value for value in selected if value not in checked],
+                "timezone": self.settings.timezone,
                 "window": {"start": start, "end": end, "end_exclusive": True},
                 "duration_minutes": duration_minutes,
                 "interpretation": "Each slot is the earliest candidate in a maximal free interval. Availability is a live snapshot, not a reservation."}
@@ -124,6 +193,9 @@ class CalendarService:
             except Exception:
                 raise CalendarError("request_id must be a UUID reused for retries of this create.") from None
             event_fields(args)
+            with self.provider_factory(self.settings) as provider:
+                if "VEVENT" not in provider.supported_components(calendar_url=backend["calendar_url"]):
+                    raise CalendarError("This collection supports tasks, not calendar events. Reminder writes are not supported; select an event calendar.")
             return {"operation": operation, "calendar_id": args["calendar_id"],
                     "changes": {k: v for k, v in args.items() if k not in ("calendar_id", "request_id")}}, backend
         with self.provider_factory(self.settings) as provider:

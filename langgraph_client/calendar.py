@@ -19,7 +19,7 @@ def configured_calendar_path(explicit=None):
 
 
 def looks_like_calendar_request(question):
-    return bool(re.search(r"\b(?:calendar|agenda|appointment|appointments|meeting|meetings|reschedule|free\s+(?:slot|time)|availability)\b|\bschedule\s+(?:a|an|my|the)\b", question, re.I))
+    return bool(re.search(r"\b(?:calendar|agenda|reminders?|appointment|appointments|meeting|meetings|reschedule|free\s+(?:slot|time)|availability)\b|\bschedule\s+(?:a|an|my|the)\b", question, re.I))
 
 
 async def terminal_calendar_approval(_context, parameters):
@@ -63,7 +63,8 @@ async def connect_calendar(stack, config_path, *, elicitation_callback=None):
 
     instructions = (
         f"Current instant: {datetime.now(timezone.utc).isoformat()}. "
-        "Calendar tools read live calendar state, not database tables. Empty calendar results are authoritative. "
+        "Calendar tools read live calendar state, not database tables. Use calendar_agenda for events and reminders together. "
+        "Empty results apply only to the checked item types and returned window/scope. Never infer empty reminders from event-only results. "
         "Only a human-facing elicitation callback can approve writes. Never answer one yourself. "
         "If approval is unavailable or declined, say no change was made and stop that write. "
         "Do not claim success for error, uncertain, or approval_required results. "

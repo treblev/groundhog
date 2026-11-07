@@ -52,6 +52,7 @@ class CalendarServiceTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.settings = settings_for(self.temporary.name)
         self.provider = Mock()
+        self.provider.supported_components.return_value = ["VEVENT"]
         self.provider.get_event.return_value = {"event": event()}
         @contextmanager
         def factory(_settings):
@@ -201,7 +202,10 @@ class CalendarProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def test_catalog_is_provider_neutral_and_approval_is_not_a_model_argument(self):
         async with create_connected_server_and_client_session(self.server) as session:
             catalog = await session.list_tools()
-        self.assertEqual(len(catalog.tools), 7)
+        self.assertEqual(len(catalog.tools), 9)
+        for name in ("calendar_agenda", "calendar_reminders"):
+            tool = next(tool for tool in catalog.tools if tool.name == name)
+            self.assertTrue(tool.annotations.readOnlyHint)
         self.assertTrue(all(tool.name.startswith("calendar_") for tool in catalog.tools))
         for tool in catalog.tools:
             self.assertNotIn("approved", tool.inputSchema.get("properties", {}))
@@ -222,6 +226,27 @@ class CalendarProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.service.write.assert_called_once_with("calendar_create_event", {"frozen": "payload"}, approved=True)
         outcomes = [json.loads(line)["outcome"] for line in self.settings.audit_path.read_text().splitlines()]
         self.assertEqual(outcomes, ["requested", "approved", "succeeded"])
+
+    async def test_agenda_and_reminder_reads_reach_service_without_approval(self):
+        self.service.read.return_value = {"reminders_checked": True, "reminder_count": 1}
+        window = {"start": "2026-11-03T00:00:00-07:00", "end": "2026-11-04T00:00:00-07:00"}
+        async with create_connected_server_and_client_session(self.server) as session:
+            agenda = await session.call_tool("calendar_agenda", window)
+            self.assertEqual(json.loads(agenda.content[0].text)["reminder_count"], 1)
+            self.service.read.assert_called_with("calendar_agenda", {**window, "calendar_ids": None, "limit": 100})
+            result = await session.call_tool("calendar_reminders", {**window, "calendar_id": "personal"})
+            self.assertEqual(json.loads(result.content[0].text)["status"], "ok")
+            self.service.read.assert_called_with("calendar_reminders", {**window, "calendar_id": "personal", "limit": 100})
+        self.service.write.assert_not_called()
+
+    async def test_failed_reminder_read_is_an_error_not_an_empty_agenda(self):
+        self.service.read.side_effect = CalendarError("Reminder access unavailable")
+        async with create_connected_server_and_client_session(self.server) as session:
+            result = await session.call_tool("calendar_agenda", {
+                "start": "2026-11-03T00:00:00-07:00", "end": "2026-11-04T00:00:00-07:00"})
+        data = json.loads(result.content[0].text)
+        self.assertEqual(data["status"], "error")
+        self.assertNotIn("reminders", data)
 
     async def test_unrenderable_confirmation_never_reaches_approval_or_write(self):
         self.service.preview.return_value = ({"description": "x" * 4000}, {"frozen": "payload"})
@@ -326,6 +351,6 @@ class CalendarProtocolTests(unittest.IsolatedAsyncioTestCase):
         # Discovery must not unlock a keyring or contact Apple.
         async with AsyncExitStack() as stack:
             tools, instructions = await connect_calendar(stack, config)
-            self.assertEqual(len(tools), 7)
+            self.assertEqual(len(tools), 9)
             self.assertIn("America/Phoenix", instructions)
             self.assertTrue(all(tool.name.startswith("calendar_") for tool in tools))

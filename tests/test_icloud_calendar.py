@@ -23,6 +23,7 @@ class CalendarTests(unittest.TestCase):
     def setUp(self):
         self.client = Mock()
         self.calendar = Mock(url=URL)
+        self.calendar.get_supported_components.return_value = ["VEVENT", "VTODO"]
         self.adapter = ICloudCalendar(self.client, calendar_urls=[URL, OTHER_URL],
                                       writable_calendar_urls=[URL], display_timezone="America/Phoenix")
         self.calendar_patch = patch("integrations.icloud_calendar.caldav.Calendar", return_value=self.calendar)

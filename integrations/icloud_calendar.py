@@ -11,6 +11,7 @@ from uuid import UUID, NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
 
 import caldav
+import recurring_ical_events
 from caldav.lib.error import NotFoundError
 from icalendar import Calendar, Event
 
@@ -73,6 +74,29 @@ def _value(component, name, fallback=None):
     return item.dt if item is not None else fallback
 
 
+def _display(value, zone):
+    if isinstance(value, datetime):
+        value = value.replace(tzinfo=zone) if value.tzinfo is None else value
+        value = value.astimezone(zone)
+    return value.isoformat() if value is not None else None
+
+
+def _instant(value, zone):
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=zone)
+    return parsed.astimezone(timezone.utc)
+
+
+def read_window(start, end, limit):
+    left, right = temporal(start, all_day=False), temporal(end, all_day=False)
+    if not timedelta(0) < right - left <= timedelta(days=93):
+        raise CalendarError("Agenda windows must be positive and no longer than 93 days.")
+    if type(limit) is not int or not 1 <= limit <= 500:
+        raise CalendarError("Agenda limit must be between 1 and 500.")
+    return left, right
+
+
 def _end(component):
     start = _value(component, "DTSTART")
     duration = component.get("DURATION")
@@ -121,13 +145,26 @@ def _matches(component, fields):
 
 
 class ICloudCalendar:
-    def __init__(self, client, *, calendar_urls=(), writable_calendar_urls=(), display_timezone):
+    def __init__(self, client, *, calendar_urls=(), writable_calendar_urls=(), display_timezone, reminder_readers=None):
         self.client = client
         self.readable = {icloud_url(url) for url in calendar_urls}
         self.writable = {icloud_url(url) for url in writable_calendar_urls}
         if not self.writable <= self.readable:
             raise CalendarError("Writable calendars must also be in calendarUrls.")
         self.zone = ZoneInfo(display_timezone)
+        self._component_cache = {}
+        self.reminder_readers = reminder_readers or {}
+
+    def _components(self, calendar):
+        url = str(calendar.url)
+        if url not in self._component_cache:
+            self.client.url = self.client.url.relocate(icloud_url(url))
+            self._component_cache[url] = sorted(str(value).upper()
+                                                for value in calendar.get_supported_components())
+        return self._component_cache[url]
+
+    def supported_components(self, *, calendar_url):
+        return self._components(self._calendar(calendar_url))
 
     def _calendar(self, url, *, write=False):
         url = icloud_url(url)
@@ -160,18 +197,16 @@ class ICloudCalendar:
 
     def calendars(self):
         return {"calendars": [{"name": calendar.name, "calendar_url": str(calendar.url),
+                               "supported_components": self._components(calendar),
                                "read_enabled": icloud_url(str(calendar.url)) in self.readable,
                                "write_enabled": icloud_url(str(calendar.url)) in self.writable}
                               for calendar in self.client.principal().get_calendars()]}
 
     def agenda(self, *, calendar_url, start, end, limit=100):
         calendar = self._calendar(calendar_url)
-        start_dt = temporal(start, all_day=False)
-        end_dt = temporal(end, all_day=False)
-        if not timedelta(0) < end_dt - start_dt <= timedelta(days=93):
-            raise CalendarError("Agenda windows must be positive and no longer than 93 days.")
-        if type(limit) is not int or not 1 <= limit <= 500:
-            raise CalendarError("Agenda limit must be between 1 and 500.")
+        start_dt, end_dt = read_window(start, end, limit)
+        if "VEVENT" not in self._components(calendar):
+            raise CalendarError("This collection does not support calendar events. Use calendar_reminders for tasks or calendar_agenda for a combined agenda.")
         objects = calendar.search(event=True, start=start_dt, end=end_dt, expand=True)
         rows = [record(obj, self.zone) for obj in objects
                 if str(obj.get_icalendar_component().get("STATUS", "")).upper() != "CANCELLED"]
@@ -179,10 +214,7 @@ class ICloudCalendar:
         # the query even though their local calendar day does not. Enforce the
         # requested window here, with DATE/floating values in the display zone.
         def instant(value):
-            parsed = datetime.fromisoformat(value)
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=self.zone)
-            return parsed.astimezone(timezone.utc)
+            return _instant(value, self.zone)
 
         def overlaps(row):
             left, right = instant(row["start"]), instant(row["end"])
@@ -199,6 +231,71 @@ class ICloudCalendar:
         return {"calendar_url": calendar_url, "timezone": str(self.zone), "events": rows[:limit],
                 "total_count": len(rows), "truncated": len(rows) > limit,
                 "window": {"start": start, "end": end, "end_exclusive": True}}
+
+    def reminders(self, *, calendar_url, start, end, limit=100):
+        """Read unfinished VTODOs scheduled in a closed, bounded query window."""
+        calendar = self._calendar(calendar_url)
+        start_dt, end_dt = read_window(start, end, limit)
+        if "VTODO" not in self._components(calendar):
+            raise CalendarError("This collection does not support reminder tasks. Use calendar_events for events or calendar_agenda for a combined agenda.")
+        if calendar_url in self.reminder_readers:
+            return self.reminder_readers[calendar_url](start=start, end=end, limit=limit)
+        # iCloud's CalDAV profile marks VTODO time-range search unsupported.
+        # Read the selected task collection, then apply dates/status locally.
+        # Library-wide expansion can drop due-only and non-recurring tasks, so
+        # expand only actual recurrence sets and preserve ordinary VTODOs.
+        objects = calendar.search(todo=True, include_completed=True, post_filter=False)
+        rows = []
+        for obj in objects:
+            instance = obj.get_icalendar_instance()
+            components = instance.walk("VTODO")
+            if not components:
+                raise CalendarError("The reminder query returned an unexpected item type.")
+            for part in components:
+                notice = str(part.get("SUMMARY", "")) + " " + str(part.get("DESCRIPTION", ""))
+                if ("DTSTART" not in part and "DUE" not in part
+                        and ("support.apple.com/HT210220" in notice
+                             or "the creator of this list has upgraded these reminders" in notice.lower())):
+                    raise CalendarError("iCloud Reminders were upgraded and are unavailable through this CalDAV collection. Current reminders need the configured Mac MCP source; do not report them as empty.")
+            if any(any(key in part for key in ("RRULE", "RDATE", "EXDATE")) for part in components):
+                components = recurring_ical_events.of(instance, components=["VTODO"]).between(start_dt, end_dt)
+            for component in components:
+                row = self._reminder_record(component, obj, start_dt, end_dt)
+                if row is not None:
+                    rows.append(row)
+        rows.sort(key=lambda row: (_instant(row["scheduled_at"], self.zone), row["uid"]))
+        return {"calendar_url": calendar_url, "timezone": str(self.zone), "reminders": rows[:limit],
+                "total_count": len(rows), "truncated": len(rows) > limit,
+                "window": {"start": start, "end": end, "end_exclusive": True},
+                "scope": "Unfinished tasks with DUE (or DTSTART when no due date exists) inside the window. Undated tasks and tasks scheduled outside the window are not included."}
+
+    def _reminder_record(self, component, obj, start_dt, end_dt):
+        if component.name != "VTODO":
+            raise CalendarError("The reminder query returned an unexpected item type.")
+        status = str(component.get("STATUS", "NEEDS-ACTION")).upper()
+        if (status in {"COMPLETED", "CANCELLED"} or "COMPLETED" in component
+                or int(component.get("PERCENT-COMPLETE", 0)) >= 100):
+            return None
+        scheduled = _value(component, "DTSTART")
+        due = _value(component, "DUE")
+        if due is None and scheduled is not None and "DURATION" in component:
+            due = scheduled + _value(component, "DURATION")
+        target = due if due is not None else scheduled
+        # Undated tasks are not evidence of an empty reminder list. The
+        # returned scope explicitly limits this result to scheduled tasks.
+        if target is None or not start_dt <= _instant(_display(target, self.zone), self.zone) < end_dt:
+            return None
+        return {
+            "uid": str(component.get("UID", "")), "event_url": str(obj.url),
+            "summary": str(component.get("SUMMARY", "")),
+            "start": _display(scheduled, self.zone), "due": _display(due, self.zone),
+            "scheduled_at": _display(target, self.zone),
+            "schedule_basis": "due" if due is not None else "start",
+            "all_day": not isinstance(target, datetime), "status": status,
+            "priority": int(component.get("PRIORITY", 0)),
+            "recurrence_id": _display(_value(component, "RECURRENCE-ID"), self.zone),
+            "recurring": any(key in component for key in ("RRULE", "RDATE", "RECURRENCE-ID")),
+        }
 
     def get_event(self, *, calendar_url, event_url):
         obj = self._load(self._calendar(calendar_url), event_url)

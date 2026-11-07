@@ -810,6 +810,7 @@ async def _review_answer(
         "Respect tool selection semantics and computed counts: latest-state rows can have different observation dates. "
         "An older latest observation is not a mismatch when its date is disclosed.\n\n"
         "Calendar writes are confirmed only by successful write results. An approval_required, declined, error, or uncertain result cannot support a claim that an event was created, changed, or deleted.\n\n"
+        "Calendar event reads do not check reminder tasks. Claims of no scheduled reminders require successful reminder reads or a combined agenda with reminders_checked=true, within its returned window/scope and without truncation.\n\n"
         f"{_review_date_context(question, str(answer.content), datetime.now(ZoneInfo(ASK_BUSINESS_TIMEZONE)).date())}\n\n"
         f"User question:\n{question}\n\n"
         f"Local evidence:\n<evidence>\n{evidence}\n</evidence>\n\n"

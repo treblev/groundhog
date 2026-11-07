@@ -19,13 +19,90 @@ bridge. The existing Groundhog data MCP server stays separate.
 
 | Tool | Purpose |
 | --- | --- |
-| `calendar_list` | Discover names, opaque IDs, and selected permissions |
-| `calendar_events` | Live agenda with expanded recurring occurrences |
+| `calendar_list` | Discover names, opaque IDs, supported item types, and permissions |
+| `calendar_agenda` | Combined events and unfinished scheduled reminder tasks |
+| `calendar_events` | Calendar events with expanded recurring occurrences |
+| `calendar_reminders` | Unfinished scheduled reminder tasks from one task collection |
 | `calendar_get_event` | Current event, opaque resource ID, and ETag |
 | `calendar_find_free_slots` | Calculate availability across selected calendars |
 | `calendar_create_event` | Create one event after human confirmation |
 | `calendar_update_event` | Patch an event after human confirmation |
 | `calendar_delete_event` | Delete one event after explicit human confirmation |
+
+Use `calendar_agenda` for agenda requests. It queries each selected collection
+using its supported component types: `VEVENT` for events and `VTODO` for tasks.
+Its `sources`, `events_checked`, and `reminders_checked` fields distinguish an
+empty checked source from an unsupported or unchecked source. Any source failure
+fails the combined read. Report truncation instead of claiming completeness.
+The limit applies separately to events and reminders.
+
+Reminder reads exclude completed/cancelled tasks. They use `DUE`, a computed
+`DTSTART + DURATION`, or `DTSTART` when no due date exists, with an inclusive
+start and exclusive end. Date-only and floating times use the configured
+timezone. Undated and outside-window tasks are excluded; an empty result means
+no unfinished reminders scheduled in that window, not an empty Reminders app.
+Notes are omitted. Reminder task writes are not supported, and task-only
+collections are not writable through the event tools.
+
+The pinned CalDAV iCloud profile marks task time-range search unsupported.
+The adapter therefore fetches VTODO resources from the selected task collection,
+expands actual recurrence sets locally, and applies its own date/status filter.
+It preserves due-only and non-recurring tasks instead of passing them through
+generic recurrence expansion. Calendar events retain their existing bounded
+query path. This uses only task collections exposed by the account's CalDAV
+endpoint; it does not claim to cover other reminder accounts or sources.
+
+### Upgraded iCloud Reminders
+
+An upgraded iCloud account can leave a task collection containing Apple's
+upgrade notice rather than current reminders. That notice is an access failure,
+not an empty task list. The adapter rejects it explicitly.
+
+Current reminders can instead come from a read-only MCP server on an existing
+Mac node. Install `remindctl` on that Mac and grant macOS Reminders access. Run
+`remindctl status` under the process identity that will run the MCP server.
+Configure this server under `nodeHost.mcp.servers` in the **Mac's** OpenClaw
+configuration, preserving its other entries:
+
+```json
+{
+  "groundhog-reminders": {
+    "command": "/absolute/path/to/groundhog/venv/bin/python",
+    "args": ["-m", "calendar_mcp.mac_reminders", "--remindctl", "/absolute/path/to/remindctl"],
+    "cwd": "/absolute/path/to/groundhog",
+    "toolFilter": {"include": ["apple_reminders_agenda"]}
+  }
+}
+```
+
+Add repeated `--list-id LIST_ID` arguments to restrict the Mac server to selected
+EventKit lists. Without them it reads all lists visible to that macOS identity.
+It returns only unfinished reminders due in the requested window and omits notes.
+It reports current EventKit due dates, without projecting future recurrence
+instances. The Mac must remain online and connected to OpenClaw. Restart the
+node host after changing its MCP configuration, then verify tool publication.
+
+In the Linux calendar service's private configuration, bind the selected
+CalDAV task collection ID to that Mac source:
+
+```json
+"reminder_node": {
+  "calendar_id": "SELECTED_TASK_COLLECTION_ID",
+  "node_id": "PAIRED_MAC_NODE_ID",
+  "server": "groundhog-reminders",
+  "openclaw_command": "/absolute/path/to/openclaw"
+}
+```
+
+The Linux service uses the approved `mcp.tools.call.v1` node relay, without shell
+execution, a new network listener, or a copied reminder database. A disconnected
+node, failed permission, unavailable MCP server, or mismatched response window
+fails the read instead of producing empty reminders. Event writes still use
+the iCloud CalDAV path and their existing human approval flow.
+
+References: [OpenClaw node MCP configuration](https://docs.openclaw.ai/nodes/mcp-and-skills),
+[remindctl and EventKit access](https://github.com/openclaw/remindctl),
+[Apple's upgraded Reminders compatibility](https://support.apple.com/en-us/102457).
 
 All three write tools request approval through MCP form elicitation. The
 empty form becomes a native Allow/Decline card containing the exact calendar
@@ -54,7 +131,8 @@ display the configured timezone. All-day dates use exclusive ends: November 2
 is `start=2026-11-02`, `end=2026-11-03`, `all_day=true`.
 
 Agenda windows are limited to 93 days. Availability windows are limited to 31
-days and default to every selected calendar. The service combines overlapping
+days and default to selected event-capable calendars. Task-only collections
+are explicitly excluded; reminder deadlines do not reserve meeting time. The service combines overlapping
 busy intervals, blocks all-day events, and ignores transparent events. It
 returns the earliest candidate of the requested duration in each maximal free
 interval. Truncated event retrieval fails availability calculation rather than
@@ -265,7 +343,7 @@ existing OpenClaw scheduling mechanism.
 ## Verification
 
 ```bash
-venv/bin/python -m unittest tests.test_icloud_calendar tests.test_calendar_mcp tests.test_ask_groundhog
+venv/bin/python -m unittest tests.test_icloud_calendar tests.test_calendar_mcp tests.test_calendar_reminders tests.test_ask_groundhog
 venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 ```
 
@@ -273,6 +351,9 @@ Tests use synthetic calendars and fake credentials. They cover the real MCP
 handshake, catalog, human approval, decline, unsupported approval, encrypted
 storage, audit failures, availability, UTC serialization, retries, and ETag
 conflicts. Optional calendar tests skip when calendar dependencies are absent.
+Reminder regressions cover the real CalDAV REPORT path, task-only collections,
+due-only and floating dates, completed tasks, recurrence expansion, wrong-type
+queries, combined-source coverage/errors, and meeting availability exclusion.
 
 After deployment, compare an agenda against Apple's Calendar app. In a selected
 test calendar, decline a create and verify no event appears. Approve a create,

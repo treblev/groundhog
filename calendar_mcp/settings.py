@@ -28,6 +28,7 @@ class Settings:
     audit_path: Path
     actor: str
     calendars: tuple[CalendarConfig, ...]
+    reminder_node: dict | None = None
 
     @classmethod
     def load(cls, path: str | Path) -> "Settings":
@@ -40,9 +41,17 @@ class Settings:
                 audit_path=Path(raw["audit_path"]), actor=raw["actor"],
                 calendars=tuple(CalendarConfig(item["id"], icloud_url(item["url"]), item.get("writable", False))
                                 for item in raw.get("calendars", [])),
+                reminder_node=raw.get("reminder_node"),
             )
             if settings.provider != "icloud":
                 raise ValueError
+            if settings.reminder_node is not None:
+                node = settings.reminder_node
+                if (not isinstance(node, dict) or set(node) != {"calendar_id", "node_id", "server", "openclaw_command"}
+                        or any(not isinstance(value, str) or not value.strip() for value in node.values())
+                        or not Path(node["openclaw_command"]).is_absolute()
+                        or node["calendar_id"] not in {c.id for c in settings.calendars}):
+                    raise ValueError
             ZoneInfo(settings.timezone)
             if any(not isinstance(value, str) or not value.strip() for value in (
                 settings.keyring_service, settings.keyring_account, settings.actor)):

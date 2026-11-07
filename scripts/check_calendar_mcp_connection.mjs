@@ -50,17 +50,31 @@ try {
   const discovered = await call("calendar_list", {});
   const selected = discovered.calendars.filter((row) => row.read_enabled);
   assert.ok(selected.length, "Select at least one readable calendar");
+  let reminderCollections = 0;
   for (const row of selected) {
-    const agenda = await call("calendar_events", {
+    assert.ok(Array.isArray(row.supported_components), "Collection capabilities missing");
+    const arguments_ = {
       calendar_id: row.calendar_id, start: values.start, end: values.end,
-    });
-    assert.ok(!agenda.truncated, "Narrow the health-check window: agenda truncated");
+    };
+    if (row.supported_components.includes("VEVENT")) {
+      const events = await call("calendar_events", arguments_);
+      assert.ok(!events.truncated, "Narrow the health-check window: events truncated");
+    }
+    if (row.supported_components.includes("VTODO")) {
+      const reminders = await call("calendar_reminders", arguments_);
+      assert.ok(!reminders.truncated, "Narrow the health-check window: reminders truncated");
+      reminderCollections++;
+    }
   }
+  const agenda = await call("calendar_agenda", { start: values.start, end: values.end });
+  assert.ok(!agenda.truncated, "Narrow the health-check window: combined agenda truncated");
+  assert.equal(agenda.sources.filter((row) => row.reminders_checked).length, reminderCollections);
   await call("calendar_find_free_slots", {
     start: values.start, end: values.end, duration_minutes: 30,
   });
   console.log(JSON.stringify({ status: "ok", transport: "installed OpenClaw stdio",
     tools: catalog.tools.length, selectedCalendars: selected.length,
+    reminderCollections, combinedAgendaChecked: true,
     durationMs: Math.round(performance.now() - started), writesAttempted: 0 }));
 } finally {
   await client.close();
