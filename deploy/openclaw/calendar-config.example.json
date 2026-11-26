@@ -1,0 +1,11 @@
+{
+  "provider": "icloud",
+  "provider_url": "https://caldav.icloud.com/",
+  "timezone": "America/Phoenix",
+  "credential_file": "/home/openclaw/.config/groundhog/calendar/credentials.enc",
+  "keyring_service": "groundhog.calendar",
+  "keyring_account": "personal-icloud",
+  "audit_path": "/home/openclaw/data/groundhog/calendar-audit.jsonl",
+  "actor": "openclaw-owner",
+  "calendars": []
+}

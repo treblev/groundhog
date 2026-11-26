@@ -1,0 +1,9 @@
+# Optional dependencies for the standalone calendar MCP server.
+mcp==1.27.1
+cryptography==48.0.0
+pydantic==2.13.4
+anyio==4.13.0
+caldav==3.7.0
+icalendar==7.3.0
+keyring==25.7.0
+recurring-ical-events==3.8.2
