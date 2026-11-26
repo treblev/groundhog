@@ -7,6 +7,7 @@ import hashlib
 from datetime import date as calendar_date
 
 import duckdb
+from config.database import connect as connect_db
 import pandas as pd
 from ta.trend import SMAIndicator
 
@@ -158,7 +159,7 @@ def compute_signals(con: duckdb.DuckDBPyConnection, ticker: str) -> None:
 
 
 def run() -> None:
-    con = duckdb.connect(str(DB_PATH))
+    con = connect_db(str(DB_PATH))
     try:
         tickers = [r[0] for r in con.execute("SELECT DISTINCT ticker FROM stock_watchlist").fetchall()]
         if not tickers:

@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 import duckdb
+from config.database import connect as connect_db
 import httpx
 from PIL import Image, ImageOps
 
@@ -291,7 +292,7 @@ def process_image(
     image_hash = _image_hash(image_path)
     reference_date = reference_date or date.today()
     init_db(db_path)
-    con = duckdb.connect(str(db_path))
+    con = connect_db(str(db_path))
     try:
         existing = con.execute("SELECT COUNT(*) FROM spending WHERE source_image_hash = ?", [image_hash]).fetchone()[0]
     finally:
@@ -302,7 +303,7 @@ def process_image(
         return result
 
     result = _normalize(_parse_transactions(_query_ollama(image_path)), reference_date)
-    con = duckdb.connect(str(db_path))
+    con = connect_db(str(db_path))
     try:
         inserted = []
         for source_row, transaction in enumerate(result["transactions"]):
@@ -336,7 +337,7 @@ def update_category(transaction_id: str, category: str) -> dict:
     normalized_category = category.strip().lower()
     if normalized_category not in CATEGORIES:
         raise ValueError(f"Category must be one of: {', '.join(sorted(CATEGORIES))}.")
-    con = duckdb.connect(str(DB_PATH))
+    con = connect_db(str(DB_PATH))
     try:
         rows = con.execute(
             "SELECT id, merchant, amount, category FROM spending WHERE id LIKE ?", [f"{transaction_id}%"]

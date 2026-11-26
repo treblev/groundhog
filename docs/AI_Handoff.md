@@ -123,7 +123,7 @@ workouts ──→ semantic chunk builder ──→ Ollama embeddings ──→ 
 - **Spending imports are idempotent**: an identical image hash is skipped, and the same merchant/amount within a three-day window is treated as a duplicate across screenshots.
 - **Merchant rules override vision guesses**: normalized Circle K merchants are always categorized as `beer`; manual category correction remains available.
 - **One SugarWOD screenshot is one plan**: multiple visible cards/sections are combined into one `workouts` record, with all card text in `description`.
-- **MCP DuckDB lifecycle**: `mcp_server/server.py` must open and close its DuckDB connection per tool call. A persistent write connection blocks ingestion in another process.
+- **MCP DuckDB lifecycle**: `mcp_server/server.py` must open and close its DuckDB connection per tool call. All connections use `config.database.connect`, which holds a cross-process advisory lock until close. Readers and writers wait for exclusive access; a persistent connection still blocks other jobs.
 - **Watchlist default period**: `"2y"` (changed from `"1d"` — 1d wasn't enough for SMA200)
 - **Tickers that leave Nasdaq-100 stay in watchlist**: intentional, you may still want to track them
 - **Blog posts**: always commit AND push in one step; never commit without pushing

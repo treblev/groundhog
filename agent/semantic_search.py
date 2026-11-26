@@ -11,6 +11,7 @@ from collections.abc import Callable
 from datetime import date
 
 import duckdb
+from config.database import connect as connect_db
 
 from agent.embeddings import embed_texts
 from agent.artifact_embeddings import search_artifacts
@@ -386,7 +387,7 @@ def sync_workout_embeddings(
     dry_run: bool = False,
 ) -> dict:
     """Idempotently index every workout, with model calls outside DB locks."""
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = connect_db(str(db_path), read_only=True)
     try:
         desired = [chunk for workout in _workouts(con) for chunk in workout_chunks(workout)]
     finally:
@@ -403,7 +404,7 @@ def sync_stock_alert_embeddings(
     dry_run: bool = False,
 ) -> dict:
     """Idempotently index weekly Supertrend alerts outside DB write locks."""
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = connect_db(str(db_path), read_only=True)
     try:
         desired = [
             chunk
@@ -424,7 +425,7 @@ def sync_stock_note_embeddings(
     dry_run: bool = False,
 ) -> dict:
     """Idempotently index active user-authored ticker notes."""
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = connect_db(str(db_path), read_only=True)
     try:
         desired = [chunk for note in _stock_notes(con) for chunk in stock_note_chunks(note)]
     finally:
@@ -439,7 +440,7 @@ def sync_activity_progress_embeddings(
     dry_run: bool = False,
 ) -> dict:
     """Idempotently index locally generated Garmin activity progress notes."""
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = connect_db(str(db_path), read_only=True)
     try:
         desired = [
             chunk
@@ -466,7 +467,7 @@ def _sync_chunks(
 
     existing_rows = []
     if not dry_run:
-        con = duckdb.connect(str(db_path), read_only=True)
+        con = connect_db(str(db_path), read_only=True)
         try:
             existing_rows = con.execute(
                 """
@@ -511,7 +512,7 @@ def _sync_chunks(
     desired_ids = {chunk["id"] for chunk in desired}
     stale_ids = set(existing) - desired_ids
     if pending or stale_ids:
-        con = duckdb.connect(str(db_path))
+        con = connect_db(str(db_path))
         try:
             con.execute("BEGIN")
             for chunk in pending:
@@ -644,7 +645,7 @@ def search_documents(
         parameters.append(period_kind)
     parameters.append(limit)
 
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = connect_db(str(db_path), read_only=True)
     try:
         if domain == DOMAIN_WORKOUT:
             cursor = con.execute(

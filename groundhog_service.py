@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import duckdb
+from config.database import connect as connect_db
 
 from agent.activity_progress import generate_activity_progress_notes
 from agent.events import event_id_for, record_event
@@ -75,7 +76,7 @@ def query_data(sql: str, max_rows: int = 100) -> dict:
     if not statement.upper().startswith(("SELECT", "WITH", "EXPLAIN")):
         raise ValueError("Only read-only SELECT, WITH, and EXPLAIN queries are allowed.")
 
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = connect_db(str(DB_PATH), read_only=True)
     try:
         result = con.execute(statement)
         columns = [column[0] for column in result.description]
@@ -94,7 +95,7 @@ def query_data(sql: str, max_rows: int = 100) -> dict:
 
 def inspect_schema(table: str | None = None) -> list[dict]:
     """Return table and column metadata for building Groundhog data queries."""
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = connect_db(str(DB_PATH), read_only=True)
     try:
         if table:
             rows = con.execute(
@@ -130,7 +131,7 @@ def _finish_run(
     error_text: str | None = None,
     summary: dict | None = None,
 ) -> None:
-    con = duckdb.connect(str(DB_PATH))
+    con = connect_db(str(DB_PATH))
     try:
         con.execute("BEGIN")
         finish_run(con, run_id, status, error_text)
@@ -174,14 +175,14 @@ def _finish_run(
 def run_daily_stocks() -> None:
     """Run daily stock ingestion, analytics, and alert generation."""
     init_db(DB_PATH)
-    con = duckdb.connect(str(DB_PATH))
+    con = connect_db(str(DB_PATH))
     try:
         run_id = start_run(con, DAILY_STOCKS_JOB)
     finally:
         con.close()
 
     try:
-        con = duckdb.connect(str(DB_PATH), read_only=True)
+        con = connect_db(str(DB_PATH), read_only=True)
         try:
             alert_count_before = con.execute("SELECT COUNT(*) FROM stock_alerts").fetchone()[0]
         finally:
@@ -199,7 +200,7 @@ def run_daily_stocks() -> None:
         _finish_run(run_id, DAILY_STOCKS_JOB, "failed", error_text)
         raise
     else:
-        con = duckdb.connect(str(DB_PATH), read_only=True)
+        con = connect_db(str(DB_PATH), read_only=True)
         try:
             alert_count_after = con.execute("SELECT COUNT(*) FROM stock_alerts").fetchone()[0]
             latest_price_date = con.execute("SELECT MAX(date) FROM stock_watchlist").fetchone()[0]
@@ -240,7 +241,7 @@ def run_daily_stocks() -> None:
 def run_weekend_crypto_prices() -> None:
     """Fetch the weekend BTC-USD price without rerunning equities or alerts."""
     init_db(DB_PATH)
-    con = duckdb.connect(str(DB_PATH))
+    con = connect_db(str(DB_PATH))
     try:
         run_id = start_run(con, WEEKEND_CRYPTO_JOB)
     finally:
@@ -253,7 +254,7 @@ def run_weekend_crypto_prices() -> None:
             print("No intraday BTC-USD quote returned; falling back to daily history.")
             stocks.run(tickers={"BTC-USD"})
         else:
-            con = duckdb.connect(str(DB_PATH))
+            con = connect_db(str(DB_PATH))
             try:
                 stocks.upsert_current_price(con, quote)
             finally:
@@ -270,7 +271,7 @@ def run_weekend_crypto_prices() -> None:
 def get_status() -> dict:
     """Return a compact operational snapshot without contacting any model."""
     init_db(DB_PATH)
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = connect_db(str(DB_PATH), read_only=True)
     try:
         latest = con.execute(
             """
@@ -331,7 +332,7 @@ def due_tasks(
 
 
 def _last_run(job_name: str) -> datetime | None:
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = connect_db(str(DB_PATH), read_only=True)
     try:
         row = con.execute(
             """
@@ -434,7 +435,7 @@ def main(argv: list[str] | None = None) -> int:
 
             review_date = latest_completed_week_end(datetime.now(PHOENIX).date())
         init_db(DB_PATH)
-        con = duckdb.connect(str(DB_PATH))
+        con = connect_db(str(DB_PATH))
         try:
             prioritize_pending_outbox(con)
             if args.kind == "daily":

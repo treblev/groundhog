@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 import duckdb
 
@@ -13,6 +14,23 @@ from ingestion import garmin, schema
 
 
 class GarminIngestionTests(unittest.TestCase):
+    def test_incremental_import_releases_lock_between_activity_checks(self):
+        from config.database import connect
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "garmin.db"
+            target = Path(temp_dir) / "groundhog.duckdb"
+            self._source_db(source)
+            convert = garmin._scalar_activity_values
+            def check_unlocked(row):
+                with connect(target, timeout=0.1) as con:
+                    self.assertEqual(con.execute("SELECT 1").fetchone(), (1,))
+                return convert(row)
+            with patch.object(garmin, "_scalar_activity_values", side_effect=check_unlocked):
+                first = garmin.import_garmin(source, target, only_missing=True)
+                second = garmin.import_garmin(source, target, only_missing=True)
+            self.assertEqual(first["activities_imported"], 1)
+            self.assertEqual(second["activities_imported"], 0)
+
     def _source_db(self, path: Path) -> None:
         con = sqlite3.connect(path)
         con.executescript(

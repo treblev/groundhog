@@ -7,6 +7,7 @@ import hashlib
 from collections.abc import Callable
 
 import duckdb
+from config.database import connect as connect_db
 from agent.embeddings import embed_text, embed_texts
 from config.settings import DB_PATH, OLLAMA_EMBEDDING_MODEL
 
@@ -55,7 +56,7 @@ def sync_memory_embeddings(
     dry_run: bool = False,
 ) -> dict:
     """Re-embed legacy memories with the configured model without mixing dimensions."""
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = connect_db(str(db_path), read_only=True)
     try:
         rows = con.execute(
             "SELECT id, fact, embedding_model FROM memory ORDER BY id"
@@ -72,7 +73,7 @@ def sync_memory_embeddings(
         raise ValueError("Embedding provider returned inconsistent vector dimensions.")
 
     if pending and not dry_run:
-        con = duckdb.connect(str(db_path))
+        con = connect_db(str(db_path))
         try:
             con.execute("BEGIN")
             for row, vector in zip(pending, vectors):

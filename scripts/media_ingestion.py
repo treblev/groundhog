@@ -20,6 +20,7 @@ from typing import Callable
 from zoneinfo import ZoneInfo
 
 import duckdb
+from config.database import connect as connect_db
 import httpx
 
 from agent.events import event_id_for, record_event
@@ -63,7 +64,7 @@ def _connect_db(
     """Wait through brief cross-process DuckDB writer collisions."""
     for attempt in range(attempts):
         try:
-            return duckdb.connect(str(db_path), read_only=read_only)
+            return connect_db(str(db_path), read_only=read_only)
         except duckdb.Error as error:
             if not _is_transient_db_lock(error) or attempt == attempts - 1:
                 raise

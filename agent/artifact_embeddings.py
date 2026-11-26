@@ -9,6 +9,7 @@ import math
 from collections.abc import Callable
 
 import duckdb
+from config.database import connect as connect_db
 
 from agent.embeddings import embed_texts
 from config.settings import DB_PATH, OLLAMA_EMBEDDING_MODEL
@@ -86,7 +87,7 @@ def sync_artifact_embeddings(
     """Backfill/repair summaries, with Ollama calls outside database connections."""
     if batch_size < 1:
         raise ValueError("batch_size must be at least 1")
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = connect_db(str(db_path), read_only=True)
     try:
         rows = _pending(con)
         sources = con.execute(
@@ -105,7 +106,7 @@ def sync_artifact_embeddings(
         if len(dimensions) > 1:
             raise ValueError("Embedding provider returned inconsistent vector dimensions.")
         if not dry_run:
-            con = duckdb.connect(str(db_path))
+            con = connect_db(str(db_path))
             try:
                 con.execute("BEGIN")
                 for row, vector in zip(batch, vectors):
@@ -154,7 +155,7 @@ def search_artifacts(
         clauses.append("period_end <= ?")
         parameters.append(end_date)
     parameters.append(max(1, min(int(top_k), 10)))
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = connect_db(str(db_path), read_only=True)
     try:
         cursor = con.execute(
             f"""

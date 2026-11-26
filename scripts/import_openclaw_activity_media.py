@@ -11,6 +11,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import duckdb
+from config.database import connect as connect_db
 
 from agent.events import event_id_for, record_event
 from agent.outbox import enqueue_event
@@ -138,7 +139,7 @@ def _enqueue_confirmation(kind: str, upload_id: str, records, screenshot_date: d
     """Queue exactly one Telegram confirmation per successfully imported image."""
     dedupe_key = f"upload_confirmation:{upload_id}"
     message = _confirmation_message(kind, records, screenshot_date)
-    con = duckdb.connect(str(DB_PATH))
+    con = connect_db(str(DB_PATH))
     try:
         record_event(
             con,

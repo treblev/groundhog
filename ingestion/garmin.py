@@ -2,8 +2,8 @@
 
 The Garmin extractor is deliberately kept separate from Groundhog.  This
 module is the only bridge between the two databases and is safe to re-run:
-the Garmin activity id is the stable identity and all child rows are replaced
-inside the same transaction for that activity.
+the Garmin activity id is the stable identity. Scheduled imports skip existing
+activities; explicit refreshes rebuild child tables in bounded batches.
 """
 
 import argparse
@@ -18,6 +18,7 @@ import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from config.database import connect as connect_db
 from config.settings import DB_PATH
 from config.settings import ASK_BUSINESS_TIMEZONE
 from ingestion.schema import init_db
@@ -443,10 +444,10 @@ def import_garmin(source_db: Path | str, groundhog_db: Path | str | None = None,
     init_db(target_path)
     source = sqlite3.connect(str(source_path))
     source.row_factory = sqlite3.Row
-    target = duckdb.connect(str(target_path))
     totals = {"activities_seen": 0, "activities_imported": 0, "metrics": 0, "laps": 0, "splits": 0, "samples": 0, "paths": 0, "strength_sets": 0, "steps_rows_seen": 0, "steps_days_imported": 0}
     try:
-        step_totals = _import_daily_steps(target, source, start_date, end_date)
+        with connect_db(str(target_path)) as target:
+            step_totals = _import_daily_steps(target, source, start_date, end_date)
         totals.update(step_totals)
         activity_rows = _rows(source, "activity")
         for row in activity_rows:
@@ -458,24 +459,24 @@ def import_garmin(source_db: Path | str, groundhog_db: Path | str | None = None,
             if end_date and (row_date is None or row_date >= end_date):
                 continue
             target_id = values[0]
-            if only_missing and target.execute("SELECT 1 FROM activities WHERE id = ?", [target_id]).fetchone():
-                continue
-            placeholders = ", ".join("?" for _ in values)
-            # Keep the parent upsert and each child-table batch in separate
-            # transactions.  A single activity can contain hundreds of
-            # thousands of samples; one giant transaction causes DuckDB to
-            # retain all index state in memory until the final commit.
-            target.execute(
-                f"INSERT INTO activities ({ACTIVITY_COLUMNS}) VALUES ({placeholders}) ON CONFLICT (id) DO UPDATE SET "
-                + ", ".join(f"{column}=COALESCE(excluded.{column}, activities.{column})" for column in _ACTIVITY_UPDATE_COLUMNS),
-                values,
-            )
-            child_counts = _import_activity_children(target, source, row)
-            for key, value in child_counts.items():
-                totals[key] += value
-            totals["activities_imported"] += 1
+            with connect_db(str(target_path)) as target:
+                if only_missing and target.execute("SELECT 1 FROM activities WHERE id = ?", [target_id]).fetchone():
+                    continue
+                placeholders = ", ".join("?" for _ in values)
+                # Keep the parent upsert and each child-table batch in separate
+                # transactions.  A single activity can contain hundreds of
+                # thousands of samples; one giant transaction causes DuckDB to
+                # retain all index state in memory until the final commit.
+                target.execute(
+                    f"INSERT INTO activities ({ACTIVITY_COLUMNS}) VALUES ({placeholders}) ON CONFLICT (id) DO UPDATE SET "
+                    + ", ".join(f"{column}=COALESCE(excluded.{column}, activities.{column})" for column in _ACTIVITY_UPDATE_COLUMNS),
+                    values,
+                )
+                child_counts = _import_activity_children(target, source, row)
+                for key, value in child_counts.items():
+                    totals[key] += value
+                totals["activities_imported"] += 1
     finally:
-        target.close()
         source.close()
     return totals
 

@@ -11,6 +11,7 @@ import subprocess
 from datetime import date
 
 import duckdb
+from config.database import connect as connect_db
 
 from agent.events import event_id_for, record_event
 from agent.outbox import enqueue_event
@@ -213,7 +214,7 @@ def _check_supertrend_flip(con, ticker: str, timeframe: str) -> None:
 
 
 def run() -> None:
-    con = duckdb.connect(str(DB_PATH))
+    con = connect_db(str(DB_PATH))
     try:
         tickers = [r[0] for r in con.execute("SELECT DISTINCT ticker FROM stock_signals").fetchall()]
         if not tickers:

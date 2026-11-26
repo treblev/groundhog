@@ -7,6 +7,7 @@ import math
 from datetime import date, timedelta
 
 import duckdb
+from config.database import connect as connect_db
 import yfinance as yf
 
 from config.settings import DB_PATH, load_watchlist
@@ -157,54 +158,52 @@ def run(tickers: set[str] | None = None) -> dict:
         print("No matching watchlist tickers.")
         return stats
 
-    con = duckdb.connect(str(DB_PATH))
-    try:
-        for ticker, period in watchlist:
-            try:
+    for ticker, period in watchlist:
+        try:
+            with connect_db(str(DB_PATH), read_only=True) as con:
                 latest_date = _latest_date(con, ticker)
-                if latest_date and ticker == BTC_TICKER:
-                    start_date = latest_date
-                else:
-                    start_date = latest_date + timedelta(days=1) if latest_date else None
-                if start_date and start_date > date.today():
-                    print(f"Skipping {ticker}: already current through {latest_date}.")
-                    stats["skipped_current"].append(ticker)
-                    continue
+            if latest_date and ticker == BTC_TICKER:
+                start_date = latest_date
+            else:
+                start_date = latest_date + timedelta(days=1) if latest_date else None
+            if start_date and start_date > date.today():
+                print(f"Skipping {ticker}: already current through {latest_date}.")
+                stats["skipped_current"].append(ticker)
+                continue
 
-                if start_date:
-                    print(f"Fetching {ticker} (since {start_date})...")
-                else:
-                    print(f"Fetching {ticker} ({period})...")
+            if start_date:
+                print(f"Fetching {ticker} (since {start_date})...")
+            else:
+                print(f"Fetching {ticker} ({period})...")
 
-                rows = _fetch_history(ticker, period, start_date)
-                has_current_bitcoin_candle = any(
-                    row[0] == date.today() for row in rows
-                )
-                if ticker == BTC_TICKER and not has_current_bitcoin_candle:
-                    print("  Current daily candle missing; trying an intraday snapshot.")
-                    quote = fetch_latest_intraday_price(ticker)
-                    if quote is not None and (
-                        start_date is None or quote[0] >= start_date
-                    ):
-                        rows = [row for row in rows if row[0] != quote[0]]
-                        rows.append(quote)
-                        stats["fallback_tickers"].append(ticker)
-                if not rows:
-                    print(f"  No data returned, skipping.")
-                    stats["no_data"].append(ticker)
-                    continue
+            rows = _fetch_history(ticker, period, start_date)
+            has_current_bitcoin_candle = any(
+                row[0] == date.today() for row in rows
+            )
+            if ticker == BTC_TICKER and not has_current_bitcoin_candle:
+                print("  Current daily candle missing; trying an intraday snapshot.")
+                quote = fetch_latest_intraday_price(ticker)
+                if quote is not None and (
+                    start_date is None or quote[0] >= start_date
+                ):
+                    rows = [row for row in rows if row[0] != quote[0]]
+                    rows.append(quote)
+                    stats["fallback_tickers"].append(ticker)
+            if not rows:
+                print(f"  No data returned, skipping.")
+                stats["no_data"].append(ticker)
+                continue
+            with connect_db(str(DB_PATH)) as con:
                 if ticker == BTC_TICKER:
                     inserted = _bulk_upsert(con, rows)
                 else:
                     inserted = _bulk_insert(con, rows)
-                print(f"  {len(rows)} rows fetched, {inserted} inserted.")
-                stats["fetched_tickers"].append(ticker)
-                stats["rows_inserted"] += inserted
-            except Exception as e:
-                print(f"  Error: {e}")
-                stats["errors"].append({"ticker": ticker, "error": str(e)})
-    finally:
-        con.close()
+            print(f"  {len(rows)} rows fetched, {inserted} inserted.")
+            stats["fetched_tickers"].append(ticker)
+            stats["rows_inserted"] += inserted
+        except Exception as e:
+            print(f"  Error: {e}")
+            stats["errors"].append({"ticker": ticker, "error": str(e)})
     return stats
 
 

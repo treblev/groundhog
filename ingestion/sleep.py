@@ -13,6 +13,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 import duckdb
+from config.database import connect as connect_db
 import httpx
 
 from config.settings import DB_PATH, OLLAMA_CHAT_URL, SLEEP_DROP_FOLDER, OLLAMA_VISION_MODEL
@@ -140,7 +141,7 @@ def process_image(image_path: Path, screenshot_date: date | None = None) -> dict
     if not metrics:
         raise ValueError(f"Could not parse sleep data: {raw[:200]}")
     metrics["date"] = date_value
-    con = duckdb.connect(str(DB_PATH))
+    con = connect_db(str(DB_PATH))
     try:
         _insert(con, metrics)
     finally:
