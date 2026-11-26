@@ -14,6 +14,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 import duckdb
+from config.database import connect as connect_db
 import httpx
 
 from config.settings import DB_PATH, OLLAMA_CHAT_URL, WORKOUTS_DROP_FOLDER, OLLAMA_VISION_MODEL
@@ -220,7 +221,7 @@ def process_image(image_path: Path, screenshot_date: date | None = None) -> int:
     workouts = _combine_workout_cards(workouts)
     _apply_filename_date(workouts, screenshot_date)
 
-    con = duckdb.connect(str(DB_PATH))
+    con = connect_db(str(DB_PATH))
     try:
         for workout in workouts:
             _insert(con, workout)

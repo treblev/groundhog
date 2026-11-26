@@ -10,6 +10,7 @@ import subprocess
 from datetime import date, datetime, timedelta
 
 import duckdb
+from config.database import connect as connect_db
 
 from agent.events import record_event
 from config.settings import DB_PATH
@@ -217,7 +218,7 @@ def run(folder: Path, dry_run: bool = False) -> dict:
         raise ValueError(f"No PDF files found in {folder}")
 
     totals = {"files": 0, "parsed": 0, "inserted": 0, "skipped_existing": 0}
-    con = duckdb.connect(str(DB_PATH), read_only=dry_run)
+    con = connect_db(str(DB_PATH), read_only=dry_run)
     try:
         if not dry_run:
             con.execute("BEGIN")

@@ -1,4 +1,5 @@
 import sys
+from contextlib import nullcontext
 import unittest
 from datetime import date, timedelta
 from decimal import Decimal
@@ -82,6 +83,7 @@ class StockIngestionTests(unittest.TestCase):
 
     def test_latest_date_and_bulk_insert_are_idempotent(self):
         con = duckdb.connect(":memory:")
+        self.addCleanup(con.close)
         try:
             _stock_table(con)
             rows = [
@@ -113,6 +115,7 @@ class StockIngestionTests(unittest.TestCase):
 
     def test_upsert_current_price_refreshes_existing_row(self):
         con = duckdb.connect(":memory:")
+        self.addCleanup(con.close)
         try:
             _stock_table(con)
             stocks.upsert_current_price(
@@ -130,6 +133,7 @@ class StockIngestionTests(unittest.TestCase):
 
     def test_bulk_upsert_replaces_a_bitcoin_snapshot(self):
         con = duckdb.connect(":memory:")
+        self.addCleanup(con.close)
         try:
             _stock_table(con)
             snapshot = (date(2026, 7, 20), "BTC-USD", 100, 101, 99, 100, 1)
@@ -154,6 +158,7 @@ class StockIngestionTests(unittest.TestCase):
 
     def test_run_fetches_starting_day_after_latest_stored_date(self):
         con = duckdb.connect(":memory:")
+        self.addCleanup(con.close)
         _stock_table(con)
         con.execute(
             """
@@ -167,7 +172,7 @@ class StockIngestionTests(unittest.TestCase):
         with (
             patch.object(stocks, "date", FrozenDate),
             patch.object(stocks, "load_watchlist", return_value=[("TEST", "2y")]),
-            patch.object(stocks.duckdb, "connect", return_value=con),
+            patch.object(stocks, "connect_db", side_effect=lambda *a, **kw: nullcontext(con)),
             patch.object(stocks, "_fetch_history", return_value=[]) as fetch,
             patch("builtins.print"),
         ):
@@ -177,10 +182,11 @@ class StockIngestionTests(unittest.TestCase):
 
     def test_run_can_limit_ingestion_to_specific_tickers(self):
         con = duckdb.connect(":memory:")
+        self.addCleanup(con.close)
         _stock_table(con)
         with (
             patch.object(stocks, "load_watchlist", return_value=[("AAPL", "2y"), ("BTC-USD", "max")]),
-            patch.object(stocks.duckdb, "connect", return_value=con),
+            patch.object(stocks, "connect_db", side_effect=lambda *a, **kw: nullcontext(con)),
             patch.object(stocks, "_fetch_history", return_value=[]) as fetch,
             patch.object(stocks, "fetch_latest_intraday_price", return_value=None) as fallback,
             patch("builtins.print"),
@@ -192,12 +198,13 @@ class StockIngestionTests(unittest.TestCase):
 
     def test_run_uses_intraday_fallback_when_bitcoin_daily_history_is_empty(self):
         con = duckdb.connect(":memory:")
+        self.addCleanup(con.close)
         _stock_table(con)
         quote = (FrozenDate.today(), "BTC-USD", 100, 103, 99, 102, 2)
         with (
             patch.object(stocks, "date", FrozenDate),
             patch.object(stocks, "load_watchlist", return_value=[("BTC-USD", "max")]),
-            patch.object(stocks.duckdb, "connect", return_value=con),
+            patch.object(stocks, "connect_db", side_effect=lambda *a, **kw: nullcontext(con)),
             patch.object(stocks, "_fetch_history", return_value=[]),
             patch.object(stocks, "fetch_latest_intraday_price", return_value=quote),
             patch("builtins.print"),
@@ -211,6 +218,7 @@ class StockIngestionTests(unittest.TestCase):
 
     def test_run_overlaps_latest_bitcoin_date_and_skips_fallback_when_current_exists(self):
         con = duckdb.connect(":memory:")
+        self.addCleanup(con.close)
         _stock_table(con)
         con.execute(
             """
@@ -227,7 +235,7 @@ class StockIngestionTests(unittest.TestCase):
         with (
             patch.object(stocks, "date", FrozenDate),
             patch.object(stocks, "load_watchlist", return_value=[("BTC-USD", "max")]),
-            patch.object(stocks.duckdb, "connect", return_value=con),
+            patch.object(stocks, "connect_db", side_effect=lambda *a, **kw: nullcontext(con)),
             patch.object(stocks, "_fetch_history", return_value=rows) as fetch,
             patch.object(stocks, "fetch_latest_intraday_price") as fallback,
             patch("builtins.print"),
@@ -241,10 +249,11 @@ class StockIngestionTests(unittest.TestCase):
 
     def test_run_does_not_use_intraday_fallback_for_an_equity(self):
         con = duckdb.connect(":memory:")
+        self.addCleanup(con.close)
         _stock_table(con)
         with (
             patch.object(stocks, "load_watchlist", return_value=[("EA", "2y")]),
-            patch.object(stocks.duckdb, "connect", return_value=con),
+            patch.object(stocks, "connect_db", side_effect=lambda *a, **kw: nullcontext(con)),
             patch.object(stocks, "_fetch_history", return_value=[]),
             patch.object(stocks, "fetch_latest_intraday_price") as fallback,
             patch("builtins.print"),

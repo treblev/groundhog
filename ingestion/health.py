@@ -14,6 +14,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 import duckdb
+from config.database import connect as connect_db
 import httpx
 
 from config.settings import DB_PATH, DROP_FOLDER, OLLAMA_CHAT_URL, OLLAMA_VISION_MODEL
@@ -252,7 +253,7 @@ def process_image(
     if not records:
         raise ValueError(f"Could not parse response: {raw[:200]}")
 
-    con = duckdb.connect(str(DB_PATH))
+    con = connect_db(str(DB_PATH))
     imported = []
     try:
         for metrics in records:

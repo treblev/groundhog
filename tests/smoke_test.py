@@ -65,7 +65,8 @@ def run() -> None:
     import agent.query as q
     import agent.memory as mem
 
-    con = duckdb.connect(str(DB_PATH))
+    from config.database import connect as connect_db
+    con = connect_db(str(DB_PATH))
 
     print("\n=== Tool functions (against the live DB) ===")
     check("run_sql", lambda: q._run_sql(con, "SELECT 1"))
@@ -76,10 +77,10 @@ def run() -> None:
     import mcp_server.server as mcp
 
     print("\n=== MCP service tools ===")
-    check("get_recent_events", lambda: mcp._dispatch("get_recent_events", {"limit": 1}))
-    check("get_pending_outbox", lambda: mcp._dispatch("get_pending_outbox", {"limit": 1}))
-    check("get_agent_run_status", lambda: mcp._dispatch("get_agent_run_status", {}))
-    check("get_latest_alerts", lambda: mcp._dispatch("get_latest_alerts", {"limit": 1}))
+    check("get_recent_events", lambda: mcp._dispatch("get_recent_events", {"limit": 1}, connection=con))
+    check("get_pending_outbox", lambda: mcp._dispatch("get_pending_outbox", {"limit": 1}, connection=con))
+    check("get_agent_run_status", lambda: mcp._dispatch("get_agent_run_status", {}, connection=con))
+    check("get_latest_alerts", lambda: mcp._dispatch("get_latest_alerts", {"limit": 1}, connection=con))
 
     print("\n=== Memory tools (write + read, cleaned up after) ===")
     test_fact = "SMOKE_TEST_FACT -- safe to ignore, deleted automatically by tests/smoke_test.py"

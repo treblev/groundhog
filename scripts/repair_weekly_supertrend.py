@@ -10,6 +10,7 @@ import argparse
 import json
 
 import duckdb
+from config.database import connect as connect_db
 
 from config.settings import DB_PATH
 
@@ -28,7 +29,7 @@ def repair(
 ) -> dict:
     """Remove only weekly Supertrend facts whose stored date is still in the future."""
     cutoff = as_of_date or datetime.now(PHOENIX).date()
-    con = duckdb.connect(str(db_path))
+    con = connect_db(str(db_path))
     transaction_started = False
     try:
         alert_ids = [

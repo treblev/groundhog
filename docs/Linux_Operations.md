@@ -11,6 +11,32 @@ Current Linux deployment assumptions:
 - Ollama: `http://Vijays-MacBook-Pro.local:11434`
 - Privacy: local Ollama only; no OpenAI or Anthropic fallback
 
+## Database Access Coordination
+
+Groundhog serializes database connections across processes and threads with an
+exclusive OS advisory lock beside the resolved database path (`.duckdb.lock`).
+Readers also participate: DuckDB cannot mix a writer process with other reader
+processes against the same file. The lock is held until the connection closes;
+process exit releases it automatically. Never delete the lock file while jobs
+are running.
+
+All application connections use `config.database.connect`. Use that connector
+for manual queries too. Direct DuckDB sessions do not participate in the
+advisory lock; Groundhog retries their native file-lock conflicts until the
+same timeout expires. External sessions must close before jobs can proceed.
+
+The default wait is 120 seconds. Set `GROUNDHOG_DB_LOCK_TIMEOUT_SECONDS` to
+change it. A timeout reports that database access is busy; it does not interrupt
+the current owner or discard its transaction. Long-running summaries or imports
+can still make other requests wait. Stock downloads release the database while
+fetching network data. The legacy interactive agent releases it between questions.
+
+After deploying connector changes, restart the media worker and OpenClaw gateway
+so persistent processes load the same coordination code. Schedules stay unchanged.
+Verify with the offline regression suite, including `tests.test_database_locking`,
+and the live smoke suite. The lock tests cover concurrent process writes, a
+waiting reader thread, timeout, crash recovery, rollback, and symlink aliases.
+
 ## Garmin Activity Sync
 
 Garmin Connect extraction is read-only and staged outside the repository. The
@@ -23,6 +49,19 @@ OpenClaw job `groundhog-garmin-sync` runs every day at 5 PM
 `ACTIVITY` for the trailing seven days, then imports missing Garmin activity
 IDs into Groundhog. The job is intentionally incremental; already-imported
 activities are skipped.
+
+The scheduled command runs Python unbuffered. It emits a progress heartbeat
+every 30 seconds during extraction and import, including database lock waits.
+Its idle-output limit is 300 seconds and its overall limit remains 1800 seconds.
+Extraction itself is limited to 900 seconds; timeout or cancellation terminates
+and reaps the extractor process group. The Garmin job sets
+`GROUNDHOG_DB_LOCK_TIMEOUT_SECONDS=600` so a concurrent 5 PM stock job can
+finish before Garmin acquires the database.
+
+A separate advisory lock beside the Garmin SQLite source prevents overlapping
+sync commands. Groundhog releases its own database lock between activities;
+it never holds that lock during network extraction. Existing activities remain
+skipped unless `--refresh-existing` is requested.
 
 Inspect the job and recent runs:
 
@@ -118,13 +157,13 @@ venv/bin/python groundhog_service.py status
 Inspect the most recent job runs:
 
 ```bash
-venv/bin/python -c "import duckdb; from config.settings import DB_PATH; con = duckdb.connect(str(DB_PATH)); print(con.execute('SELECT job_name, status, started_at, finished_at, error_text FROM agent_runs ORDER BY started_at DESC LIMIT 10').fetchall())"
+venv/bin/python -c "from config.database import connect; from config.settings import DB_PATH; con = connect(str(DB_PATH)); print(con.execute('SELECT job_name, status, started_at, finished_at, error_text FROM agent_runs ORDER BY started_at DESC LIMIT 10').fetchall())"
 ```
 
 Inspect recent Groundhog events:
 
 ```bash
-venv/bin/python -c "import duckdb; from config.settings import DB_PATH; con = duckdb.connect(str(DB_PATH)); print(con.execute('SELECT event_type, source, subject_type, subject_id, occurred_at, payload FROM events ORDER BY occurred_at DESC LIMIT 20').fetchall())"
+venv/bin/python -c "from config.database import connect; from config.settings import DB_PATH; con = connect(str(DB_PATH)); print(con.execute('SELECT event_type, source, subject_type, subject_id, occurred_at, payload FROM events ORDER BY occurred_at DESC LIMIT 20').fetchall())"
 ```
 
 Event conventions:
@@ -142,7 +181,7 @@ outbox item itself; OpenClaw reads and updates this table through MCP.
 Inspect pending delivery items with their source facts:
 
 ```bash
-venv/bin/python -c "import duckdb; from config.settings import DB_PATH; con = duckdb.connect(str(DB_PATH)); print(con.execute(\"SELECT o.id, e.event_type, e.payload, o.created_at FROM outbox o JOIN events e ON e.id = o.event_id WHERE o.status = 'pending' ORDER BY o.created_at\").fetchall())"
+venv/bin/python -c "from config.database import connect; from config.settings import DB_PATH; con = connect(str(DB_PATH)); print(con.execute(\"SELECT o.id, e.event_type, e.payload, o.created_at FROM outbox o JOIN events e ON e.id = o.event_id WHERE o.status = 'pending' ORDER BY o.created_at\").fetchall())"
 ```
 
 ## OpenClaw Telegram Delivery
@@ -266,7 +305,7 @@ diagnostics.
 Useful database checks:
 
 ```bash
-venv/bin/python -c "import duckdb; from config.settings import DB_PATH; con=duckdb.connect(str(DB_PATH)); print(con.execute('SELECT transaction_date, merchant, amount, category FROM spending ORDER BY transaction_date DESC, created_at DESC LIMIT 20').fetchall())"
+venv/bin/python -c "from config.database import connect; from config.settings import DB_PATH; con=connect(str(DB_PATH)); print(con.execute('SELECT transaction_date, merchant, amount, category FROM spending ORDER BY transaction_date DESC, created_at DESC LIMIT 20').fetchall())"
 venv/bin/python -m unittest tests.test_spending_ingestion tests.test_media_ingestion
 node --test deploy/openclaw/plugins/groundhog-spending-router/core.test.js
 ```

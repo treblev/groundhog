@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import duckdb
+from config.database import connect as connect_db
 
 from agent.semantic_search import sync_stock_note_embeddings
 from agent.request_trace import RequestTrace, use_trace
@@ -54,7 +55,7 @@ def add_note(
     if not note:
         raise ValueError("note must not be empty")
     note_id = uuid.uuid4().hex
-    con = duckdb.connect(str(db_path))
+    con = connect_db(str(db_path))
     transaction_started = False
     try:
         con.execute("BEGIN")
@@ -92,7 +93,7 @@ def edit_note(
     note = note.strip()
     if not note:
         raise ValueError("note must not be empty")
-    con = duckdb.connect(str(db_path))
+    con = connect_db(str(db_path))
     transaction_started = False
     try:
         row = _active_note(con, note_id)
@@ -135,7 +136,7 @@ def delete_note(
     db_path: Path | str = DB_PATH,
     embedder=None,
 ) -> dict:
-    con = duckdb.connect(str(db_path))
+    con = connect_db(str(db_path))
     transaction_started = False
     try:
         row = _active_note(con, note_id)
@@ -174,7 +175,7 @@ def delete_note(
 
 def list_notes(ticker: str, *, db_path: Path | str = DB_PATH) -> list[dict]:
     ticker = normalize_ticker(ticker)
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = connect_db(str(db_path), read_only=True)
     try:
         cursor = con.execute(
             """

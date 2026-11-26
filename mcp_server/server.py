@@ -8,6 +8,7 @@ import json
 from decimal import Decimal
 
 import duckdb
+from config.database import connect as connect_db
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
@@ -340,7 +341,7 @@ def _dispatch(
         return json.dumps(results, default=_json_default)
 
     owns_connection = connection is None
-    con = connection or duckdb.connect(str(DB_PATH))
+    con = connection or connect_db(str(DB_PATH))
     try:
         return _dispatch_with_connection(con, name, args)
     finally:

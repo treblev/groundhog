@@ -8,6 +8,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 DB_PATH = Path(os.environ["GROUNDHOG_DB_PATH"])
+DB_LOCK_TIMEOUT_SECONDS = float(os.environ.get("GROUNDHOG_DB_LOCK_TIMEOUT_SECONDS", "120"))
+
+
+def database_lock_path(db_path: Path | str) -> Path:
+    """Use the same advisory lock for relative paths and symlink aliases."""
+    return Path(str(Path(db_path).resolve()) + ".lock")
+
+
 DROP_FOLDER = BASE_DIR / "data" / "drop"
 SLEEP_DROP_FOLDER = BASE_DIR / "data" / "drop" / "sleep8"
 WORKOUTS_DROP_FOLDER = BASE_DIR / "data" / "drop" / "workouts"

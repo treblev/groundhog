@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone
 
 import duckdb
+from config.database import connect as connect_db
 import httpx
 
 from config.settings import DB_PATH, OLLAMA_CHAT_URL, OLLAMA_SQL_MODEL
@@ -362,29 +363,24 @@ def _ask(question: str, schema: str, con: duckdb.DuckDBPyConnection) -> str:
 
 
 def run() -> None:
-    con = duckdb.connect(str(DB_PATH))
-    schema = _get_schema(con)
+    with connect_db(str(DB_PATH)) as con:
+        schema = _get_schema(con)
 
     print("Groundhog Agent — ask anything about your data. Type 'exit' to quit.\n")
-
-    try:
-        while True:
-            try:
-                question = input("You: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\nBye.")
-                break
-
-            if not question:
-                continue
-            if question.lower() in {"exit", "quit"}:
-                print("Bye.")
-                break
-
+    while True:
+        try:
+            question = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nBye.")
+            break
+        if not question:
+            continue
+        if question.lower() in {"exit", "quit"}:
+            print("Bye.")
+            break
+        with connect_db(str(DB_PATH)) as con:
             answer = _ask(question, schema, con)
-            print(f"Agent: {answer}\n")
-    finally:
-        con.close()
+        print(f"Agent: {answer}\n")
 
 
 if __name__ == "__main__":

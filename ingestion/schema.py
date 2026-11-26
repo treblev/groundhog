@@ -5,10 +5,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import duckdb
+from config.database import connect as connect_db
 from config.settings import DB_PATH
 
 def init_db(db_path: Path | str | None = None):
-    con = duckdb.connect(str(db_path or DB_PATH))
+    with connect_db(str(db_path or DB_PATH)) as con:
+        _init_schema(con)
+
+
+def _init_schema(con):
     
     con.execute("""
         CREATE TABLE IF NOT EXISTS health_metrics (
@@ -517,7 +522,6 @@ def init_db(db_path: Path | str | None = None):
         )
     """)
 
-    con.close()
 
 if __name__ == "__main__":
     init_db()
