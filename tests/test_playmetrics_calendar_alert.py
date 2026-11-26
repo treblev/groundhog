@@ -45,6 +45,56 @@ class PlayMetricsCalendarAlertTests(unittest.TestCase):
             [ScheduleEvent(time="6:15 PM - 7:30 PM", field="Field #4")],
         )
 
+    def test_extracts_compact_target_date_from_multiple_practices(self):
+        request = request_for_day(date(2026, 10, 21))
+        events = _extract_events_from_texts(
+            [
+                "Wed21today Blue Team Practice 6:30 PM – 8:00 PM Field 2",
+                "Thu22 Blue Team Practice 6:00 PM – 7:30 PM Field 5",
+            ],
+            request,
+        )
+        self.assertEqual(
+            events,
+            [ScheduleEvent(time="6:30 PM – 8:00 PM", field="Field 2")],
+        )
+
+    def test_compact_day_does_not_match_a_longer_day_number(self):
+        request = request_for_day(date(2026, 11, 3))
+        events = _extract_events_from_texts(
+            [
+                "Tue30 Blue Team Practice 5:00 PM Field 1",
+                "Tue3 Blue Team Practice 6:30 PM Field 2",
+            ],
+            request,
+        )
+        self.assertEqual(events, [ScheduleEvent(time="6:30 PM", field="Field 2")])
+
+    def test_duplicate_undated_cards_collapse_to_one_event(self):
+        request = request_for_day(date(2026, 10, 21))
+        events = _extract_events_from_texts(
+            [
+                "Today Blue Team Practice 6:30 PM – 8:00 PM Field 2",
+                "Blue Team Practice 6:30 PM – 8:00 PM Field 2",
+            ],
+            request,
+        )
+        self.assertEqual(
+            events,
+            [ScheduleEvent(time="6:30 PM – 8:00 PM", field="Field 2")],
+        )
+
+    def test_distinct_undated_practices_remain_ambiguous(self):
+        request = request_for_day(date(2026, 10, 21))
+        events = _extract_events_from_texts(
+            [
+                "Blue Team Practice 6:30 PM – 8:00 PM Field 2",
+                "Blue Team Practice 6:00 PM – 7:30 PM Field 5",
+            ],
+            request,
+        )
+        self.assertEqual(events, [])
+
     def test_team_filter_excludes_other_team(self):
         request = request_for_day(date(2026, 10, 20))
         events = _extract_events_from_texts(
@@ -64,6 +114,17 @@ class PlayMetricsCalendarAlertTests(unittest.TestCase):
             request,
         )
         self.assertEqual(events, [])
+
+    def test_extracts_compact_game_card_without_game_keyword(self):
+        request = request_for_day(date(2026, 10, 23))
+        events = _extract_events_from_texts(
+            [
+                "Sat24 Blue Team Away @ Red Team 10:50 AM "
+                "(Arrive by 10:20 AM) City Park (Soccer field) 1"
+            ],
+            request,
+        )
+        self.assertEqual(events, [ScheduleEvent(time="10:50 AM", field="Field 1")])
 
     def test_message_format(self):
         request = request_for_day(date(2026, 10, 23))
