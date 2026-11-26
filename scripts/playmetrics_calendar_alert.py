@@ -39,7 +39,9 @@ TIME_RE = re.compile(
     re.IGNORECASE,
 )
 FIELD_RE = re.compile(
-    r"\b(?:field|fld)\s*(?:#|no\.?|number)?\s*[:\-]?\s*[A-Za-z0-9-]+",
+    r"\b(?:field|fld)\s*\)?\s*"
+    r"(?P<marker>#|no\.?|number)?\s*[:\-]?\s*"
+    r"(?P<value>[A-Za-z0-9-]+)",
     re.IGNORECASE,
 )
 LOGIN_MARKERS = ("log in", "login", "sign in", "forgot password")
@@ -80,6 +82,8 @@ def date_labels(value: date) -> list[str]:
         f"{weekday}, {month} {value.day}, {value.year}",
         f"{weekday}, {month} {value.day}",
         f"{short_weekday}, {short_month} {value.day}",
+        f"{short_weekday}{value.day}",
+        f"{short_weekday} {value.day}",
         f"{month} {value.day}",
         f"{short_month} {value.day}",
     ]
@@ -95,6 +99,22 @@ def _contains_any(text: str, values: Iterable[str]) -> bool:
     return any(value.casefold() in lowered for value in values)
 
 
+def _contains_date_label(text: str, labels: Iterable[str]) -> bool:
+    """Match a rendered date label without treating day 3 as day 30."""
+    for label in labels:
+        prefix = r"(?<![A-Za-z0-9])" if label[0].isalnum() else ""
+        suffix = r"(?!\d)" if label[-1].isdigit() else ""
+        if re.search(f"{prefix}{re.escape(label)}{suffix}", text, re.IGNORECASE):
+            return True
+    return False
+
+
+def _event_keywords(kind: str) -> tuple[str, ...]:
+    if kind == "game":
+        return ("game", "home vs", "away @")
+    return (kind,)
+
+
 def _extract_events_from_texts(
     texts: Iterable[str],
     request: ScheduleRequest,
@@ -102,37 +122,30 @@ def _extract_events_from_texts(
 ) -> list[ScheduleEvent]:
     """Extract unique, fully specified events from browser candidate text."""
     labels = date_labels(request.target_date)
-    keyword = request.kind.casefold()
+    keywords = _event_keywords(request.kind)
+    eligible: list[str] = []
     matching: list[str] = []
 
     for raw_text in texts:
         text = _normalise_text(raw_text)
         lowered = text.casefold()
-        if not text or keyword not in lowered:
+        if not text or not any(keyword in lowered for keyword in keywords):
             continue
         if team_filter and team_filter.casefold() not in lowered:
             continue
-        if _contains_any(text, labels):
+        eligible.append(text)
+        if _contains_date_label(text, labels):
             matching.append(text)
 
     # Some event cards omit the date because the date is rendered in a sibling
-    # calendar header. The browser extractor walks ancestors to include it, but
-    # retain a conservative fallback for a calendar that has only one matching
-    # event visible. Multiple undated matches are intentionally treated as
-    # ambiguous instead of guessing.
-    if not matching:
-        undated = []
-        for raw_text in texts:
-            text = _normalise_text(raw_text)
-            lowered = text.casefold()
-            if keyword not in lowered:
-                continue
-            if team_filter and team_filter.casefold() not in lowered:
-                continue
-            undated.append(text)
-        unique_undated = list(dict.fromkeys(undated))
-        if len(unique_undated) == 1:
-            matching = unique_undated
+    # calendar header. The browser extractor walks ancestors to include it. If
+    # no dated text survives, parse all eligible texts and accept the result
+    # only when they collapse to one unique time-and-field pair. This handles
+    # duplicate renderings of the same "Today" card without guessing between
+    # genuinely different undated events.
+    dated_match = bool(matching)
+    if not dated_match:
+        matching = eligible
 
     events: list[ScheduleEvent] = []
     seen: set[tuple[str, str]] = set()
@@ -143,12 +156,18 @@ def _extract_events_from_texts(
             continue
         event = ScheduleEvent(
             time=_normalise_text(time_match.group(0)).upper(),
-            field=_normalise_text(field_match.group(0)),
+            field=(
+                "Field "
+                f"{'#' if field_match.group('marker') == '#' else ''}"
+                f"{field_match.group('value')}"
+            ),
         )
         key = (event.time.casefold(), event.field.casefold())
         if key not in seen:
             seen.add(key)
             events.append(event)
+    if not dated_match and len(events) != 1:
+        return []
     return events
 
 
@@ -254,23 +273,32 @@ def _extract_page(
         raise RuntimeError("OpenClaw did not return a target ID for the PlayMetrics tab")
 
     labels_json = json.dumps(date_labels(request.target_date))
-    keyword_json = json.dumps(request.kind)
+    keywords_json = json.dumps(_event_keywords(request.kind))
     script = f"""() => {{
       const dateLabels = {labels_json}.map((value) => value.toLowerCase());
-      const keyword = {keyword_json}.toLowerCase();
+      const keywords = {keywords_json}.map((value) => value.toLowerCase());
       const visible = (el) => {{
         const style = window.getComputedStyle(el);
         return style.visibility !== 'hidden' && style.display !== 'none';
       }};
       const clean = (value) => (value || '').replace(/\\s+/g, ' ').trim();
-      const nodes = Array.from(document.querySelectorAll(
-        'article, li, [role="listitem"], [role="gridcell"], [role="button"], button, a, [data-testid], [aria-label], [class*="event"], [class*="Event"]'
+      const eventCards = Array.from(document.querySelectorAll(
+        '.calendar-event-box'
       ));
+      const nodes = eventCards.length ? eventCards : Array.from(
+        document.querySelectorAll(
+          'article, li, [role="listitem"], [role="gridcell"], [role="button"], button, a, [data-testid], [aria-label], [class*="event"], [class*="Event"]'
+        )
+      );
       const candidates = [];
       for (const node of nodes) {{
         if (!visible(node)) continue;
         const ownText = clean(node.innerText || node.textContent);
-        if (!ownText.toLowerCase().includes(keyword)) continue;
+        if (!keywords.some((keyword) => ownText.toLowerCase().includes(keyword))) continue;
+        if (eventCards.length) {{
+          candidates.push(ownText);
+          continue;
+        }}
         let selected = node;
         let cursor = node;
         for (let depth = 0; depth < 6 && cursor; depth += 1) {{
